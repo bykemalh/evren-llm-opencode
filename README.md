@@ -12,7 +12,7 @@ Windows (CMD ve PowerShell) ile Linux/macOS (Bash/Zsh) desteği sunar.
 ### Linux / macOS
 
 ```bash
-curl -fsSL "https://raw.githubusercontent.com/bykemalh/evren-llm-opencode/main/evren-opencode.sh" -o "/tmp/evren-opencode.sh" && bash "/tmp/evren-opencode.sh"
+curl -fsSL https://raw.githubusercontent.com/bykemalh/evren-llm-opencode/main/evren-opencode.sh | bash
 ```
 
 ### Windows — PowerShell
