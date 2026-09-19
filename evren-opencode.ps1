@@ -211,6 +211,9 @@ finally {
     [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
 }
 
+# Yapistirmadan gelebilecek bas-son bosluklari temizle
+$ApiKey = $ApiKey.Trim()
+
 if ([string]::IsNullOrWhiteSpace($ApiKey)) {
     Fail "API key bos birakilamaz."
 }

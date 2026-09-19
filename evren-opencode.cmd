@@ -38,7 +38,7 @@ echo.
 :: ── 1) API key al (gizli) ───────────────────────────────────
 for /f "usebackq delims=" %%A in (
   `powershell.exe -NoProfile -Command ^
-    "$s=Read-Host 'EVREN LLM API keyinizi girin' -AsSecureString; $b=[Runtime.InteropServices.Marshal]::SecureStringToBSTR($s); try{[Runtime.InteropServices.Marshal]::PtrToStringBSTR($b)}finally{[Runtime.InteropServices.Marshal]::ZeroFreeBSTR($b)}"`
+    "$s=Read-Host 'EVREN LLM API keyinizi girin' -AsSecureString; $b=[Runtime.InteropServices.Marshal]::SecureStringToBSTR($s); try{([Runtime.InteropServices.Marshal]::PtrToStringBSTR($b)).Trim()}finally{[Runtime.InteropServices.Marshal]::ZeroFreeBSTR($b)}"`
 ) do set "EVREN_LLM_API_KEY=%%A"
 
 if not defined EVREN_LLM_API_KEY (

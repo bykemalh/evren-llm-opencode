@@ -247,9 +247,17 @@ fi
 printf '=== EVREN LLM + OpenCode Kurulumu ===\n'
 
 # ── 1) API key al ─────────────────────────────────────────────────────────────
-
-IFS= read -r -s -p "EVREN LLM API key'inizi girin: " EVREN_LLM_API_KEY
+# Not: `curl ... | bash` ile calistirildiginda stdin pipe olur; klavyeden
+# (yapistirma ile) okuyabilmek icin dogrudan terminalden oku.
+if [[ -r /dev/tty ]]; then
+  IFS= read -r -s -p "EVREN LLM API key'inizi girin: " EVREN_LLM_API_KEY </dev/tty
+else
+  IFS= read -r -s -p "EVREN LLM API key'inizi girin: " EVREN_LLM_API_KEY
+fi
 printf '\n'
+
+# Yapistirmadan gelebilecek \r / bas-son bosluklari temizle
+EVREN_LLM_API_KEY="$(printf '%s' "$EVREN_LLM_API_KEY" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
 
 if [[ ! "$EVREN_LLM_API_KEY" =~ ^evren_llm_[A-Za-z0-9_-]+$ ]]; then
   fail "API key beklenen evren_llm_... formatinda degil."
@@ -293,7 +301,11 @@ if [[ "$accepted" != "true" ]]; then
   fi
 
   printf '\n'
-  read -r -p "Bu kullanim sartlarini kabul ediyor musunuz? Kabul icin EVET yazin: " confirmation
+  if [[ -r /dev/tty ]]; then
+    read -r -p "Bu kullanim sartlarini kabul ediyor musunuz? Kabul icin EVET yazin: " confirmation </dev/tty
+  else
+    read -r -p "Bu kullanim sartlarini kabul ediyor musunuz? Kabul icin EVET yazin: " confirmation
+  fi
   confirmation_upper="$(printf '%s' "$confirmation" | tr '[:lower:]' '[:upper:]')"
   [[ "$confirmation_upper" == "EVET" ]] || fail "Kullanim sartlari kabul edilmedi. Kurulum durduruldu."
 
