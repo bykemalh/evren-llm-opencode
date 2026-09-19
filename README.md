@@ -12,7 +12,7 @@ Windows (CMD ve PowerShell) ile Linux/macOS (Bash/Zsh) desteği sunar.
 ### Linux / macOS
 
 ```bash
-bash <(curl -fsSL "https://raw.githubusercontent.com/bykemalh/evren-llm-opencode/main/evren-opencode.sh")
+curl -fsSL "https://raw.githubusercontent.com/bykemalh/evren-llm-opencode/main/evren-opencode.sh" -o "/tmp/evren-opencode.sh" && bash "/tmp/evren-opencode.sh"
 ```
 
 ### Windows — PowerShell
@@ -176,4 +176,6 @@ Ortam değişkeni yeni terminal oturumlarında otomatik yüklenir. Hemen aktif e
 
 ## Lisans
 
-Bu repodaki scriptler açık kaynaktır. EVREN LLM API kullanımı [EVREN Kullanım Şartları](https://evren.ssyz.org.tr)'na tabidir.
+Bu repo [MIT lisansı](LICENSE) ile lisanslanmıştır.
+
+EVREN LLM API kullanımı [EVREN Kullanım Şartları](https://evren.ssyz.org.tr)'na tabidir.

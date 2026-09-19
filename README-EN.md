@@ -12,7 +12,7 @@ Works on Windows (CMD and PowerShell) and Linux/macOS (Bash/Zsh).
 ### Linux / macOS
 
 ```bash
-bash <(curl -fsSL "https://raw.githubusercontent.com/bykemalh/evren-llm-opencode/main/evren-opencode.sh")
+curl -fsSL "https://raw.githubusercontent.com/bykemalh/evren-llm-opencode/main/evren-opencode.sh" -o "/tmp/evren-opencode.sh" && bash "/tmp/evren-opencode.sh"
 ```
 
 ### Windows — PowerShell
@@ -176,4 +176,6 @@ The environment variable takes effect in new terminal sessions. If you need it i
 
 ## License
 
-The scripts in this repository are open source. Use of the EVREN LLM API is subject to the [EVREN Terms of Service](https://evren.ssyz.org.tr).
+This repository is licensed under the [MIT License](LICENSE).
+
+Use of the EVREN LLM API is subject to the [EVREN Terms of Service](https://evren.ssyz.org.tr).
