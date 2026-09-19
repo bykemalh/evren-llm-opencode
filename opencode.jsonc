@@ -1,0 +1,34 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "evren/glm-5.3",
+  "provider": {
+    "evren": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "EVREN LLM",
+      "options": {
+        "baseURL": "https://evren-llmapi.ssyz.org.tr/v1",
+        "apiKey": "{env:EVREN_LLM_API_KEY}"
+      },
+      "models": {
+        "glm-5.3": {
+          "name": "GLM 5.3"
+        },
+        "deepseek-v4-flash": {
+          "name": "DeepSeek V4 Flash"
+        },
+        "qwen3.8-flash-next": {
+          "name": "Qwen 3.8 Flash Next"
+        },
+        "gemma-4-31b": {
+          "name": "Gemma 4 31B"
+        },
+        "qwen3-vl-30b": {
+          "name": "Qwen3 VL 30B"
+        },
+        "auto": {
+          "name": "EVREN Auto"
+        }
+      }
+    }
+  }
+}
