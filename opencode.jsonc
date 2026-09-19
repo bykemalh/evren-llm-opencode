@@ -1,32 +1,57 @@
 {
   "$schema": "https://opencode.ai/config.json",
   "model": "evren/glm-5.3",
+  "small_model": "evren/deepseek-v4-flash",
   "provider": {
     "evren": {
       "npm": "@ai-sdk/openai-compatible",
       "name": "EVREN LLM",
       "options": {
         "baseURL": "https://evren-llmapi.ssyz.org.tr/v1",
-        "apiKey": "{env:EVREN_LLM_API_KEY}"
+        "apiKey": "{file:~/.config/opencode/.evren-key}"
       },
       "models": {
         "glm-5.3": {
-          "name": "GLM 5.3"
+          "name": "GLM 5.3",
+          "limit": {
+            "context": 200000,
+            "output": 16384
+          }
         },
         "deepseek-v4-flash": {
-          "name": "DeepSeek V4 Flash"
+          "name": "DeepSeek V4 Flash",
+          "limit": {
+            "context": 128000,
+            "output": 8192
+          }
         },
         "qwen3.8-flash-next": {
-          "name": "Qwen 3.8 Flash Next"
+          "name": "Qwen 3.8 Flash Next",
+          "limit": {
+            "context": 128000,
+            "output": 8192
+          }
         },
         "gemma-4-31b": {
-          "name": "Gemma 4 31B"
+          "name": "Gemma 4 31B",
+          "limit": {
+            "context": 128000,
+            "output": 8192
+          }
         },
         "qwen3-vl-30b": {
-          "name": "Qwen3 VL 30B"
+          "name": "Qwen3 VL 30B",
+          "limit": {
+            "context": 128000,
+            "output": 8192
+          }
         },
         "auto": {
-          "name": "EVREN Auto"
+          "name": "EVREN Auto",
+          "limit": {
+            "context": 128000,
+            "output": 8192
+          }
         }
       }
     }

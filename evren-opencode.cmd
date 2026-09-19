@@ -23,6 +23,8 @@ setlocal EnableExtensions EnableDelayedExpansion
 set "BASE_URL=https://evren-llmapi.ssyz.org.tr/v1"
 set "CONFIG_DIR=%USERPROFILE%\.config\opencode"
 set "CONFIG_PATH=%CONFIG_DIR%\opencode.jsonc"
+set "KEY_FILE=%CONFIG_DIR%\.evren-key"
+set "API_KEY_REF={file:~/.config/opencode/.evren-key}"
 
 :: ── Parametre kontrolü ──────────────────────────────────────
 
@@ -60,6 +62,16 @@ if errorlevel 1 (
   exit /b 1
 )
 echo [OK] EVREN_LLM_API_KEY kullanici ortam degiskenine kaydedildi.
+
+:: Anahtari dosya referansi icin .evren-key'e yaz (GUI/IDE dahil her yerden calisir)
+if not exist "%CONFIG_DIR%" mkdir "%CONFIG_DIR%"
+powershell.exe -NoProfile -Command ^
+  "Set-Content -Path '%KEY_FILE%' -Value '%EVREN_LLM_API_KEY%' -Encoding UTF8NoBOM -NoNewline"
+if errorlevel 1 (
+  echo HATA: API anahtari .evren-key dosyasina yazilamadi.
+  exit /b 1
+)
+echo [OK] API anahtari .evren-key dosyasina yazildi.
 
 :: ── 2) Terms durumunu kontrol et ────────────────────────────
 for /f "usebackq delims=" %%A in (
@@ -130,21 +142,22 @@ if exist "%CONFIG_PATH%" (
 
 :: Merge işlemini PowerShell'e devret
 powershell.exe -NoProfile -Command ^
-  "$configPath='%CONFIG_PATH%'; $schema='https://opencode.ai/config.json'; " ^
+  "$configPath='%CONFIG_PATH%'; $apiKeyRef='%API_KEY_REF%'; $schema='https://opencode.ai/config.json'; " ^
   "$evren=[PSCustomObject]@{ npm='@ai-sdk/openai-compatible'; name='EVREN LLM'; " ^
-  "  options=[PSCustomObject]@{ baseURL='https://evren-llmapi.ssyz.org.tr/v1'; apiKey='{env:EVREN_LLM_API_KEY}' }; " ^
-  "  models=[PSCustomObject]@{ 'glm-5.3'=[PSCustomObject]@{name='GLM 5.3'}; " ^
-  "    'deepseek-v4-flash'=[PSCustomObject]@{name='DeepSeek V4 Flash'}; " ^
-  "    'qwen3.8-flash-next'=[PSCustomObject]@{name='Qwen 3.8 Flash Next'}; " ^
-  "    'gemma-4-31b'=[PSCustomObject]@{name='Gemma 4 31B'}; " ^
-  "    'qwen3-vl-30b'=[PSCustomObject]@{name='Qwen3 VL 30B'}; " ^
-  "    'auto'=[PSCustomObject]@{name='EVREN Auto'} } }; " ^
+  "  options=[PSCustomObject]@{ baseURL='https://evren-llmapi.ssyz.org.tr/v1'; apiKey=$apiKeyRef }; " ^
+  "  models=[PSCustomObject]@{ 'glm-5.3'=[PSCustomObject]@{name='GLM 5.3'; limit=[PSCustomObject]@{context=200000; output=16384}}; " ^
+  "    'deepseek-v4-flash'=[PSCustomObject]@{name='DeepSeek V4 Flash'; limit=[PSCustomObject]@{context=128000; output=8192}}; " ^
+  "    'qwen3.8-flash-next'=[PSCustomObject]@{name='Qwen 3.8 Flash Next'; limit=[PSCustomObject]@{context=128000; output=8192}}; " ^
+  "    'gemma-4-31b'=[PSCustomObject]@{name='Gemma 4 31B'; limit=[PSCustomObject]@{context=128000; output=8192}}; " ^
+  "    'qwen3-vl-30b'=[PSCustomObject]@{name='Qwen3 VL 30B'; limit=[PSCustomObject]@{context=128000; output=8192}}; " ^
+  "    'auto'=[PSCustomObject]@{name='EVREN Auto'; limit=[PSCustomObject]@{context=128000; output=8192}} } }; " ^
   "if(Test-Path $configPath){ $raw=Get-Content $configPath -Raw -Encoding UTF8; " ^
-  "  $stripped=$raw -replace '(?m)^\s*//.*$','' -replace '/\*[\s\S]*?\*/',''; " ^
+  "  $stripped=$raw -replace '(?m)^\s*//.*$','' -replace '/\*[\s\S]*?\*/','' -replace ',\s*([}\]])','$1'; " ^
   "  try{ $cfg=$stripped|ConvertFrom-Json }catch{ $cfg=[PSCustomObject]@{} } " ^
   "}else{ $cfg=[PSCustomObject]@{} }; " ^
   "if(-not $cfg.PSObject.Properties['\$schema']){$cfg|Add-Member -NotePropertyName '\$schema' -NotePropertyValue $schema -Force}; " ^
   "if(-not $cfg.PSObject.Properties['model']){$cfg|Add-Member -NotePropertyName 'model' -NotePropertyValue 'evren/glm-5.3' -Force}; " ^
+  "if(-not $cfg.PSObject.Properties['small_model']){$cfg|Add-Member -NotePropertyName 'small_model' -NotePropertyValue 'evren/deepseek-v4-flash' -Force}; " ^
   "if(-not $cfg.PSObject.Properties['provider']){$cfg|Add-Member -NotePropertyName 'provider' -NotePropertyValue ([PSCustomObject]@{}) -Force}; " ^
   "$cfg.provider|Add-Member -NotePropertyName 'evren' -NotePropertyValue $evren -Force; " ^
   "[System.IO.File]::WriteAllText($configPath,$cfg|ConvertTo-Json -Depth 10,[System.Text.UTF8Encoding]::new($false))"
@@ -202,12 +215,13 @@ if exist "%CONFIG_PATH%" (
 
   powershell.exe -NoProfile -Command ^
     "$p='%CONFIG_PATH%'; $raw=Get-Content $p -Raw -Encoding UTF8; " ^
-    "$stripped=$raw -replace '(?m)^\s*//.*$','' -replace '/\*[\s\S]*?\*/',''; " ^
+    "$stripped=$raw -replace '(?m)^\s*//.*$','' -replace '/\*[\s\S]*?\*/','' -replace ',\s*([}\]])','$1'; " ^
     "try{ $cfg=$stripped|ConvertFrom-Json }catch{ Write-Host '[INFO] JSON parse hatasi, degisiklik yapilmadi.';exit 0 }; " ^
     "$removed=$false; " ^
     "if($cfg.provider -and $cfg.provider.PSObject.Properties['evren']){ $cfg.provider.PSObject.Properties.Remove('evren'); $removed=$true; " ^
     "  if(($cfg.provider.PSObject.Properties|Measure-Object).Count -eq 0){ $cfg.PSObject.Properties.Remove('provider') } }; " ^
     "if($cfg.PSObject.Properties['model'] -and $cfg.model -like 'evren/*'){ $cfg.PSObject.Properties.Remove('model'); Write-Host '[INFO] Varsayilan model evren/... kaldirildi.' }; " ^
+    "if($cfg.PSObject.Properties['small_model'] -and $cfg.small_model -like 'evren/*'){ $cfg.PSObject.Properties.Remove('small_model'); Write-Host '[INFO] small_model evren/... kaldirildi.' }; " ^
     "if($removed){ [System.IO.File]::WriteAllText($p,$cfg|ConvertTo-Json -Depth 10,[System.Text.UTF8Encoding]::new($false)); Write-Host '[OK] evren provider blogu kaldirildi.' " ^
     "}else{ Write-Host '[INFO] evren blogu bulunamadi; config degistirilmedi.' }"
 
@@ -224,6 +238,14 @@ powershell.exe -NoProfile -Command ^
   "$v=[Environment]::GetEnvironmentVariable('EVREN_LLM_API_KEY','User'); " ^
   "if($null -ne $v){ [Environment]::SetEnvironmentVariable('EVREN_LLM_API_KEY',$null,'User'); Write-Host '[OK] EVREN_LLM_API_KEY kullanici ortam degiskeninden kaldirildi.' " ^
   "}else{ Write-Host '[INFO] EVREN_LLM_API_KEY zaten tanimli degil.' }"
+
+:: .evren-key dosyasini sil
+if exist "%KEY_FILE%" (
+  del "%KEY_FILE%"
+  echo [OK] .evren-key dosyasi silindi.
+) else (
+  echo [INFO] .evren-key dosyasi zaten yok.
+)
 
 echo.
 echo [OK] Kaldirma tamamlandi. Diger provider/ayarlar korundu.

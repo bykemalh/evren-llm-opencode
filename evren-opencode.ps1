@@ -31,6 +31,9 @@ $ErrorActionPreference = "Stop"
 $BaseUrl   = "https://evren-llmapi.ssyz.org.tr/v1"
 $ConfigDir = Join-Path ([Environment]::GetFolderPath("UserProfile")) ".config\opencode"
 $ConfigPath = Join-Path $ConfigDir "opencode.jsonc"
+$KeyFile = Join-Path $ConfigDir ".evren-key"
+# Shell'den bagimsiz calismasi icin config bu dosya referansini kullanir
+$ApiKeyRef = "{file:~/.config/opencode/.evren-key}"
 
 # ── Yardımcı fonksiyonlar ────────────────────────────────────────────────────
 
@@ -123,20 +126,23 @@ function Backup-Config {
 
 # ── EVREN provider bloğu ─────────────────────────────────────────────────────
 
+# NOT: limit degerleri opencode'un varsayilan 200k context / 32k output
+# faraziyesini ezer. 32k output bircok API'de "max_tokens too large" veya
+# gereksiz rate-limit baskisi yaratir; muhafazakar degerler kullanilir.
 $EvrenProvider = [PSCustomObject]@{
     npm     = "@ai-sdk/openai-compatible"
     name    = "EVREN LLM"
     options = [PSCustomObject]@{
         baseURL = "https://evren-llmapi.ssyz.org.tr/v1"
-        apiKey  = "{env:EVREN_LLM_API_KEY}"
+        apiKey  = $ApiKeyRef
     }
     models  = [PSCustomObject]@{
-        "glm-5.3"           = [PSCustomObject]@{ name = "GLM 5.3" }
-        "deepseek-v4-flash" = [PSCustomObject]@{ name = "DeepSeek V4 Flash" }
-        "qwen3.8-flash-next"= [PSCustomObject]@{ name = "Qwen 3.8 Flash Next" }
-        "gemma-4-31b"       = [PSCustomObject]@{ name = "Gemma 4 31B" }
-        "qwen3-vl-30b"      = [PSCustomObject]@{ name = "Qwen3 VL 30B" }
-        "auto"              = [PSCustomObject]@{ name = "EVREN Auto" }
+        "glm-5.3"           = [PSCustomObject]@{ name = "GLM 5.3";            limit = [PSCustomObject]@{ context = 200000; output = 16384 } }
+        "deepseek-v4-flash" = [PSCustomObject]@{ name = "DeepSeek V4 Flash";  limit = [PSCustomObject]@{ context = 128000; output = 8192 } }
+        "qwen3.8-flash-next"= [PSCustomObject]@{ name = "Qwen 3.8 Flash Next";limit = [PSCustomObject]@{ context = 128000; output = 8192 } }
+        "gemma-4-31b"       = [PSCustomObject]@{ name = "Gemma 4 31B";        limit = [PSCustomObject]@{ context = 128000; output = 8192 } }
+        "qwen3-vl-30b"      = [PSCustomObject]@{ name = "Qwen3 VL 30B";       limit = [PSCustomObject]@{ context = 128000; output = 8192 } }
+        "auto"              = [PSCustomObject]@{ name = "EVREN Auto";         limit = [PSCustomObject]@{ context = 128000; output = 8192 } }
     }
 }
 
@@ -169,6 +175,12 @@ if ($Uninstall) {
             Info "Varsayilan model 'evren/...' kaldirildi."
         }
 
+        # small_model "evren/..." ise temizle
+        if ($cfg.PSObject.Properties["small_model"] -and ($cfg.small_model -like "evren/*")) {
+            Remove-Property -Obj $cfg -Name "small_model"
+            Info "small_model 'evren/...' kaldirildi."
+        }
+
         if ($removed) {
             Write-Config -Cfg $cfg
             Ok "opencode.jsonc'den 'evren' provider blogu kaldirildi: $ConfigPath"
@@ -187,6 +199,14 @@ if ($Uninstall) {
         Ok "EVREN_LLM_API_KEY kullanici ortam degiskeninden kaldirildi."
     } else {
         Info "EVREN_LLM_API_KEY zaten tanimli degil."
+    }
+
+    # 3) Anahtar dosyasini sil
+    if (Test-Path $KeyFile) {
+        Remove-Item $KeyFile -Force
+        Ok ".evren-key dosyasi silindi ($KeyFile)."
+    } else {
+        Info ".evren-key dosyasi zaten yok."
     }
 
     Write-Host ""
@@ -226,6 +246,11 @@ if ($ApiKey -notmatch '^evren_llm_[A-Za-z0-9_-]+$') {
 [Environment]::SetEnvironmentVariable("EVREN_LLM_API_KEY", $ApiKey, "User")
 $env:EVREN_LLM_API_KEY = $ApiKey
 Ok "EVREN_LLM_API_KEY kullanici ortam degiskenine kaydedildi."
+
+# Anahtari dosya referansi icin .evren-key'e yaz (GUI/IDE dahil her yerden calisir)
+New-Item -ItemType Directory -Force -Path $ConfigDir | Out-Null
+Set-Content -Path $KeyFile -Value $ApiKey -Encoding UTF8NoBOM -NoNewline
+Ok "API anahtari $KeyFile dosyasina yazildi."
 
 $Headers = @{ Authorization = "Bearer $ApiKey" }
 
@@ -305,6 +330,11 @@ if (-not $cfg.PSObject.Properties["`$schema"]) {
 # model: sadece daha önce set edilmemişse evren varsayılanını yaz
 if (-not $cfg.PSObject.Properties["model"]) {
     $cfg | Add-Member -NotePropertyName "model" -NotePropertyValue "evren/glm-5.3" -Force
+}
+
+# small_model: hafif isler (baslik vb.) icin flash model, rate-limit baskisini azaltir
+if (-not $cfg.PSObject.Properties["small_model"]) {
+    $cfg | Add-Member -NotePropertyName "small_model" -NotePropertyValue "evren/deepseek-v4-flash" -Force
 }
 
 # provider objesini oluştur (yoksa)

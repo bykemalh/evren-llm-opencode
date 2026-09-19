@@ -7,14 +7,20 @@
 #   ./evren-opencode.sh --uninstall  (kaldirma)
 #
 # Kurulum:
-#   - API key'i gizli alir, shell RC dosyasina kalici olarak yazar
+#   - API key'i gizli alir
+#   - Anahtari SHELL RC dosyalarina (bash/zsh/profile/fish) VE
+#     ~/.config/opencode/.evren-key dosyasina yazar (chmod 600)
+#   - Config'deki apiKey "{file:~/.config/opencode/.evren-key}" referansi
+#     kullanir: boylece GUI/IDE/desktop'ten baslatilan opencode da
+#     calisir (RC dosyalarini okumayan ortamlarda {env:...} bos gelir)
 #   - EVREN kullanim sartlarini gosterir / kabul alir
 #   - opencode.jsonc icindeki mevcut ayarlara dokunmadan
-#     "evren" provider blogunu ekler / gunceller
+#     "evren" provider blogunu ekler / gunceller (limit degerleriyle)
 #
 # Kaldirma:
 #   - opencode.jsonc'den "evren" blogunu cikarir
-#   - Shell RC dosyasindan EVREN_LLM_API_KEY satirini siler
+#   - Shell RC dosyalarindan EVREN_LLM_API_KEY satirini siler
+#   - .evren-key dosyasini siler
 #   - Diger provider / ayarlar korunur
 # ============================================================
 
@@ -23,14 +29,28 @@ set -euo pipefail
 BASE_URL="https://evren-llmapi.ssyz.org.tr/v1"
 CONFIG_DIR="${HOME}/.config/opencode"
 CONFIG_PATH="${CONFIG_DIR}/opencode.jsonc"
+KEY_FILE="${CONFIG_DIR}/.evren-key"
+# Config icine yazilan apiKey referansi (shell'den bagimsiz calisir)
+API_KEY_REF="{file:~/.config/opencode/.evren-key}"
 
-# Kullanılan shell RC dosyasını belirle
-shell_name="$(basename "${SHELL:-bash}")"
-case "$shell_name" in
-  zsh)  RC_FILE="${HOME}/.zshrc"   ;;
-  bash) RC_FILE="${HOME}/.bashrc"  ;;
-  *)    RC_FILE="${HOME}/.profile" ;;
-esac
+# Kalici env icin hedef RC dosyalari.
+# NOT: $SHELL tek basina guvenilmez (fish/zsh/karmasik kurulumlar, desktop
+# baslaticilari). Bu yuzden var olan tum yaygin RC dosyalarina yazilir.
+RC_FILES=()
+[[ -f "${HOME}/.bashrc" ]] && RC_FILES+=("${HOME}/.bashrc")
+[[ -f "${HOME}/.zshrc" ]] && RC_FILES+=("${HOME}/.zshrc")
+[[ -f "${HOME}/.profile" ]] && RC_FILES+=("${HOME}/.profile")
+[[ -f "${HOME}/.bash_profile" ]] && RC_FILES+=("${HOME}/.bash_profile")
+if [[ ${#RC_FILES[@]} -eq 0 ]]; then
+  shell_name="$(basename "${SHELL:-bash}")"
+  case "$shell_name" in
+    zsh)  RC_FILES=("${HOME}/.zshrc")   ;;
+    bash) RC_FILES=("${HOME}/.bashrc")  ;;
+    *)    RC_FILES=("${HOME}/.profile") ;;
+  esac
+fi
+# fish ayri syntax kullanir
+FISH_CONFIG="${HOME}/.config/fish/config.fish"
 
 # ── Yardımcı fonksiyonlar ─────────────────────────────────────────────────────
 
@@ -62,37 +82,49 @@ backup_config() {
 
 # Python3 ile JSON merge: mevcut JSON'a provider.evren bloğunu ekle/güncelle
 merge_config_python() {
-python3 - "$CONFIG_PATH" <<'PYEOF'
+python3 - "$CONFIG_PATH" "$KEY_FILE" "$API_KEY_REF" <<'PYEOF'
 import sys, json, os
 
 config_path = sys.argv[1]
+key_file    = sys.argv[2]
+api_key_ref = sys.argv[3]
 config_dir  = os.path.dirname(config_path)
 os.makedirs(config_dir, exist_ok=True)
 
+# NOT: limit degerleri opencode'un varsayilan 200k context / 32k output
+# faraziyesini ezer. 32k output bircok API'de "max_tokens too large" veya
+# gereksiz kredi/rate-limit baskisi yaratir; muhafazakar degerler kullanilir.
 evren_block = {
     "npm": "@ai-sdk/openai-compatible",
     "name": "EVREN LLM",
     "options": {
         "baseURL": "https://evren-llmapi.ssyz.org.tr/v1",
-        "apiKey":  "{env:EVREN_LLM_API_KEY}"
+        "apiKey":  api_key_ref
     },
     "models": {
-        "glm-5.3":            {"name": "GLM 5.3"},
-        "deepseek-v4-flash":  {"name": "DeepSeek V4 Flash"},
-        "qwen3.8-flash-next": {"name": "Qwen 3.8 Flash Next"},
-        "gemma-4-31b":        {"name": "Gemma 4 31B"},
-        "qwen3-vl-30b":       {"name": "Qwen3 VL 30B"},
-        "auto":               {"name": "EVREN Auto"}
+        "glm-5.3":            {"name": "GLM 5.3",
+                               "limit": {"context": 200000, "output": 16384}},
+        "deepseek-v4-flash":  {"name": "DeepSeek V4 Flash",
+                               "limit": {"context": 128000, "output": 8192}},
+        "qwen3.8-flash-next": {"name": "Qwen 3.8 Flash Next",
+                               "limit": {"context": 128000, "output": 8192}},
+        "gemma-4-31b":        {"name": "Gemma 4 31B",
+                               "limit": {"context": 128000, "output": 8192}},
+        "qwen3-vl-30b":       {"name": "Qwen3 VL 30B",
+                               "limit": {"context": 128000, "output": 8192}},
+        "auto":               {"name": "EVREN Auto",
+                               "limit": {"context": 128000, "output": 8192}}
     }
 }
 
 cfg = {}
 if os.path.isfile(config_path):
     raw = open(config_path, encoding="utf-8").read()
-    # Basit JSONC yorum temizleme
+    # Basit JSONC temizleme: // yorum, /* */ yorum, trailing comma
     import re
     raw = re.sub(r'(?m)^\s*//.*$', '', raw)
     raw = re.sub(r'/\*[\s\S]*?\*/', '', raw)
+    raw = re.sub(r',\s*([}\]])', r'\1', raw)
     try:
         cfg = json.loads(raw)
     except Exception:
@@ -100,6 +132,8 @@ if os.path.isfile(config_path):
 
 cfg.setdefault("$schema", "https://opencode.ai/config.json")
 cfg.setdefault("model",   "evren/glm-5.3")
+# Baslik/ozet gibi hafif isler icin flash model: ana modelde rate-limit baskisini azaltir
+cfg.setdefault("small_model", "evren/deepseek-v4-flash")
 cfg.setdefault("provider", {})
 cfg["provider"]["evren"] = evren_block
 
@@ -111,38 +145,44 @@ print(f"[OK] opencode.jsonc guncellendi: {config_path}")
 PYEOF
 }
 
-# jq ile JSON merge
+# jq ile JSON merge (JSONC girdiyi python ile once saf JSON'a cevirir)
 merge_config_jq() {
   local evren_json
-  evren_json=$(cat <<'JSON'
+  evren_json=$(cat <<JSON
 {
   "npm": "@ai-sdk/openai-compatible",
   "name": "EVREN LLM",
   "options": {
     "baseURL": "https://evren-llmapi.ssyz.org.tr/v1",
-    "apiKey":  "{env:EVREN_LLM_API_KEY}"
+    "apiKey":  "$API_KEY_REF"
   },
   "models": {
-    "glm-5.3":            {"name": "GLM 5.3"},
-    "deepseek-v4-flash":  {"name": "DeepSeek V4 Flash"},
-    "qwen3.8-flash-next": {"name": "Qwen 3.8 Flash Next"},
-    "gemma-4-31b":        {"name": "Gemma 4 31B"},
-    "qwen3-vl-30b":       {"name": "Qwen3 VL 30B"},
-    "auto":               {"name": "EVREN Auto"}
+    "glm-5.3":            {"name": "GLM 5.3",            "limit": {"context": 200000, "output": 16384}},
+    "deepseek-v4-flash":  {"name": "DeepSeek V4 Flash",  "limit": {"context": 128000, "output": 8192}},
+    "qwen3.8-flash-next": {"name": "Qwen 3.8 Flash Next","limit": {"context": 128000, "output": 8192}},
+    "gemma-4-31b":        {"name": "Gemma 4 31B",        "limit": {"context": 128000, "output": 8192}},
+    "qwen3-vl-30b":       {"name": "Qwen3 VL 30B",       "limit": {"context": 128000, "output": 8192}},
+    "auto":               {"name": "EVREN Auto",         "limit": {"context": 128000, "output": 8192}}
   }
 }
 JSON
 )
   mkdir -p "$CONFIG_DIR"
   local base="{}"
-  [[ -f "$CONFIG_PATH" ]] && base="$(cat "$CONFIG_PATH")"
+  if [[ -f "$CONFIG_PATH" ]]; then
+    # JSONC -> JSON (yorum + trailing comma temizle), basarisizsa {}
+    base="$(python3 -c 'import sys,re,json; raw=open(sys.argv[1],encoding="utf-8").read(); raw=re.sub(r"(?m)^\s*//.*$","",raw); raw=re.sub(r"/\*[\s\S]*?\*/","",raw); raw=re.sub(r",\s*([}\]])",r"\1",raw);
+try: print(json.dumps(json.loads(raw)))
+except Exception: print("{}")' "$CONFIG_PATH" 2>/dev/null || printf '{}')"
+  fi
 
-  # jq: $schema yoksa ekle, model yoksa ekle, provider.evren'i güncelle
+  # jq: $schema yoksa ekle, model/small_model yoksa ekle, provider.evren'i güncelle
   printf '%s' "$base" | jq \
     --argjson evren "$evren_json" \
     '
       if has("$schema") then . else . + {"$schema": "https://opencode.ai/config.json"} end |
       if has("model")   then . else . + {"model": "evren/glm-5.3"} end |
+      if has("small_model") then . else . + {"small_model": "evren/deepseek-v4-flash"} end |
       .provider //= {} |
       .provider.evren = $evren
     ' > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
@@ -163,6 +203,7 @@ if not os.path.isfile(config_path):
 raw = open(config_path, encoding="utf-8").read()
 raw = re.sub(r'(?m)^\s*//.*$', '', raw)
 raw = re.sub(r'/\*[\s\S]*?\*/', '', raw)
+raw = re.sub(r',\s*([}\]])', r'\1', raw)
 
 try:
     cfg = json.loads(raw)
@@ -181,6 +222,10 @@ if cfg.get("model", "").startswith("evren/"):
     del cfg["model"]
     print("[INFO] Varsayilan model 'evren/...' kaldirildi.")
 
+if cfg.get("small_model", "").startswith("evren/"):
+    del cfg["small_model"]
+    print("[INFO] small_model 'evren/...' kaldirildi.")
+
 if removed:
     with open(config_path, "w", encoding="utf-8") as f:
         json.dump(cfg, f, indent=2, ensure_ascii=False)
@@ -197,14 +242,71 @@ remove_evren_jq() {
     info "opencode.jsonc bulunamadi; degisiklik yapilmadi."
     return
   fi
-  jq '
+  local clean
+  clean="$(python3 -c 'import sys,re,json; raw=open(sys.argv[1],encoding="utf-8").read(); raw=re.sub(r"(?m)^\s*//.*$","",raw); raw=re.sub(r"/\*[\s\S]*?\*/","",raw); raw=re.sub(r",\s*([}\]])",r"\1",raw);
+try: print(json.dumps(json.loads(raw)))
+except Exception: print("{}")' "$CONFIG_PATH" 2>/dev/null || printf '{}')"
+  printf '%s' "$clean" | jq '
     if .provider.evren? then
       del(.provider.evren) |
       if (.provider | length) == 0 then del(.provider) else . end
     else . end |
-    if (.model? // "") | startswith("evren/") then del(.model) else . end
-  ' "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
+    if (.model? // "") | startswith("evren/") then del(.model) else . end |
+    if (.small_model? // "") | startswith("evren/") then del(.small_model) else . end
+  ' > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
   ok "'evren' provider blogu kaldirildi (veya zaten yoktu)."
+}
+
+# Tum RC dosyalarindan EVREN_LLM_API_KEY satirini sil
+remove_env_from_rc() {
+  local rc
+  for rc in "${RC_FILES[@]}"; do
+    if [[ -f "$rc" ]]; then
+      local tmp_rc
+      tmp_rc="$(mktemp)"
+      grep -v '^[[:space:]]*export[[:space:]][[:space:]]*EVREN_LLM_API_KEY=' "$rc" > "$tmp_rc" || true
+      cat "$tmp_rc" > "$rc"
+      rm -f "$tmp_rc"
+      ok "EVREN_LLM_API_KEY $rc dosyasindan kaldirildi."
+    fi
+  done
+  if [[ -f "$FISH_CONFIG" ]]; then
+    local tmp_fish
+    tmp_fish="$(mktemp)"
+    grep -v 'EVREN_LLM_API_KEY' "$FISH_CONFIG" > "$tmp_fish" || true
+    cat "$tmp_fish" > "$FISH_CONFIG"
+    rm -f "$tmp_fish"
+    ok "EVREN_LLM_API_KEY $FISH_CONFIG dosyasindan kaldirildi."
+  fi
+}
+
+# Tum RC dosyalarina kalici export yaz (mevcut satiri once temizler)
+write_env_to_rc() {
+  local rc
+  for rc in "${RC_FILES[@]}"; do
+    touch "$rc"
+    local tmp_rc
+    tmp_rc="$(mktemp)"
+    grep -v '^[[:space:]]*export[[:space:]][[:space:]]*EVREN_LLM_API_KEY=' "$rc" > "$tmp_rc" || true
+    cat "$tmp_rc" > "$rc"
+    rm -f "$tmp_rc"
+    # shellcheck disable=SC2016
+    printf '\nexport EVREN_LLM_API_KEY='"'"'%s'"'"'\n' "$EVREN_LLM_API_KEY" >> "$rc"
+    # NOT: tum .bashrc'yi 600 yapma; sadece anahtar dosyasini koru
+    ok "EVREN_LLM_API_KEY $rc dosyasina yazildi."
+  done
+  # fish kullanicilari icin
+  if command -v fish >/dev/null 2>&1; then
+    mkdir -p "$(dirname "$FISH_CONFIG")"
+    touch "$FISH_CONFIG"
+    local tmp_fish
+    tmp_fish="$(mktemp)"
+    grep -v 'EVREN_LLM_API_KEY' "$FISH_CONFIG" > "$tmp_fish" || true
+    cat "$tmp_fish" > "$FISH_CONFIG"
+    rm -f "$tmp_fish"
+    printf '\nset -gx EVREN_LLM_API_KEY %s\n' "'$EVREN_LLM_API_KEY'" >> "$FISH_CONFIG"
+    ok "EVREN_LLM_API_KEY $FISH_CONFIG dosyasina yazildi."
+  fi
 }
 
 # ── Parametre kontrolü ────────────────────────────────────────────────────────
@@ -223,15 +325,15 @@ if [[ "${1:-}" == "--uninstall" ]]; then
     remove_evren_jq
   fi
 
-  # Shell RC dosyasından EVREN_LLM_API_KEY satırını sil
-  if [[ -f "$RC_FILE" ]]; then
-    tmp_rc="$(mktemp)"
-    grep -v '^[[:space:]]*export[[:space:]][[:space:]]*EVREN_LLM_API_KEY=' "$RC_FILE" > "$tmp_rc" || true
-    cat "$tmp_rc" > "$RC_FILE"
-    rm -f "$tmp_rc"
-    ok "EVREN_LLM_API_KEY $RC_FILE dosyasindan kaldirildi."
+  # Shell RC dosyalarından EVREN_LLM_API_KEY satırlarını sil
+  remove_env_from_rc
+
+  # Anahtar dosyasini sil
+  if [[ -f "$KEY_FILE" ]]; then
+    rm -f "$KEY_FILE"
+    ok ".evren-key dosyasi silindi ($KEY_FILE)."
   else
-    info "RC dosyasi bulunamadi ($RC_FILE); degisiklik yapilmadi."
+    info ".evren-key dosyasi zaten yok."
   fi
 
   printf '\n'
@@ -265,15 +367,14 @@ fi
 
 export EVREN_LLM_API_KEY
 
-# Shell RC dosyasına kalıcı olarak yaz
-touch "$RC_FILE"
-tmp_rc="$(mktemp)"
-grep -v '^[[:space:]]*export[[:space:]][[:space:]]*EVREN_LLM_API_KEY=' "$RC_FILE" > "$tmp_rc" || true
-cat "$tmp_rc" > "$RC_FILE"
-rm -f "$tmp_rc"
-printf "\nexport EVREN_LLM_API_KEY='%s'\n" "$EVREN_LLM_API_KEY" >> "$RC_FILE"
-chmod 600 "$RC_FILE" 2>/dev/null || true
-ok "EVREN_LLM_API_KEY $RC_FILE dosyasina kalici olarak yazildi."
+# 1a) Anahtari dosya referansi icin .evren-key'e yaz (GUI/IDE/desktop icin esas cozum)
+mkdir -p "$CONFIG_DIR"
+printf '%s' "$EVREN_LLM_API_KEY" > "$KEY_FILE"
+chmod 600 "$KEY_FILE"
+ok "API anahtari $KEY_FILE dosyasina yazildi (chmod 600)."
+
+# 1b) Shell RC dosyalarına kalıcı olarak yaz (terminal + dogrudan curl kullanimi icin)
+write_env_to_rc
 
 auth_header="Authorization: Bearer ${EVREN_LLM_API_KEY}"
 
@@ -340,13 +441,21 @@ else
   merge_config_jq
 fi
 
-chmod 600 "$CONFIG_PATH" 2>/dev/null || true
+chmod 600 "$KEY_FILE" 2>/dev/null || true
 
 # ── 5) OpenCode doğrulaması ──────────────────────────────────────────────────
+# NOT: config artik {file:...} referansi kullandigi icin dogrulama env olmadan
+# da gecmelidir (GUI/IDE senaryosu). Env'i bilerek bosaltarak test et.
 
 if command -v opencode >/dev/null 2>&1; then
   printf '\n=== opencode models ===\n'
   opencode models || fail "opencode models komutu basarisiz oldu."
+  printf '\n--- env olmadan tekrar test (GUI/IDE simulasyonu) ---\n'
+  if env -u EVREN_LLM_API_KEY opencode models >/dev/null 2>&1; then
+    ok "Dosya referansi dogrulandi: env olmadan da calisiyor."
+  else
+    warn "env olmadan calisma testi basarisiz; .evren-key dosyasini kontrol edin."
+  fi
   printf '\n'
   ok "OpenCode EVREN provider'i okuyabiliyor."
   printf '\nTest komutu:\n'
@@ -362,4 +471,7 @@ else
   printf '\nKaldirmak icin: ./evren-opencode.sh --uninstall\n'
 fi
 
-printf '\nNot: Kalici env degiskeni yeni terminal oturumlarinda otomatik yuklenir.\n'
+printf '\nNot: opencode artik anahtari %s dosyasindan okur; terminali yeniden baslatmaya gerek yoktur.\n' "$KEY_FILE"
+printf 'Terminalde dogrudan curl icin env degiskeni de yazildi; yeni terminalde gecerli olur.\n'
+printf '\nRate-limit notu: EVREN API yogun istekte "5 saniye sonra tekrar deneyin" donebilir.\n'
+printf 'opencode ile tek gorev calistirin, paralel ajanlardan kacin; 429 alirsaniz kisa bekleyip tekrar deneyin.\n'
