@@ -104,6 +104,8 @@ evren_block = {
     "models": {
         "glm-5.3":            {"name": "GLM 5.3",
                                "limit": {"context": 200000, "output": 16384}},
+        "deepseek-v4.1-flash": {"name": "DeepSeek V4.1 Flash",
+                                "limit": {"context": 128000, "output": 8192}},
         "deepseek-v4-flash":  {"name": "DeepSeek V4 Flash",
                                "limit": {"context": 128000, "output": 8192}},
         "qwen3.8-flash-next": {"name": "Qwen 3.8 Flash Next",
@@ -133,7 +135,7 @@ if os.path.isfile(config_path):
 cfg.setdefault("$schema", "https://opencode.ai/config.json")
 cfg.setdefault("model",   "evren/glm-5.3")
 # Baslik/ozet gibi hafif isler icin flash model: ana modelde rate-limit baskisini azaltir
-cfg.setdefault("small_model", "evren/deepseek-v4-flash")
+cfg.setdefault("small_model", "evren/deepseek-v4.1-flash")
 cfg.setdefault("provider", {})
 cfg["provider"]["evren"] = evren_block
 
@@ -158,6 +160,7 @@ merge_config_jq() {
   },
   "models": {
     "glm-5.3":            {"name": "GLM 5.3",            "limit": {"context": 200000, "output": 16384}},
+    "deepseek-v4.1-flash":{"name": "DeepSeek V4.1 Flash", "limit": {"context": 128000, "output": 8192}},
     "deepseek-v4-flash":  {"name": "DeepSeek V4 Flash",  "limit": {"context": 128000, "output": 8192}},
     "qwen3.8-flash-next": {"name": "Qwen 3.8 Flash Next","limit": {"context": 128000, "output": 8192}},
     "gemma-4-31b":        {"name": "Gemma 4 31B",        "limit": {"context": 128000, "output": 8192}},
@@ -182,7 +185,7 @@ except Exception: print("{}")' "$CONFIG_PATH" 2>/dev/null || printf '{}')"
     '
       if has("$schema") then . else . + {"$schema": "https://opencode.ai/config.json"} end |
       if has("model")   then . else . + {"model": "evren/glm-5.3"} end |
-      if has("small_model") then . else . + {"small_model": "evren/deepseek-v4-flash"} end |
+      if has("small_model") then . else . + {"small_model": "evren/deepseek-v4.1-flash"} end |
       .provider //= {} |
       .provider.evren = $evren
     ' > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"

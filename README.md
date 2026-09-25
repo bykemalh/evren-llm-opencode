@@ -58,7 +58,7 @@ evren-opencode.cmd --uninstall
 
 1. **API Anahtarı** — Anahtarınızı gizli olarak (ekranda görünmeden) girer, `evren_llm_...` formatını doğrular. Anahtarı iki yere yazar: shell RC dosyalarına (`~/.bashrc`, `~/.zshrc`, `~/.profile`, fish config — terminal/curl kullanımı için) ve `~/.config/opencode/.evren-key` dosyasına (`chmod 600` — opencode'un okuduğu asıl kaynak).
 2. **Kullanım Şartları** — EVREN'in kullanım şartlarını API üzerinden çeker, ekranda gösterir ve onayınızı ister. Daha önce kabul ettiyseniz bu adım atlanır.
-3. **Config Birleştirme** — Mevcut `~/.config/opencode/opencode.jsonc` dosyasını okur, `evren` provider bloğunu ekler veya günceller, geri kalan her şeyi olduğu gibi bırakır. Dosya yoksa sıfırdan oluşturur. Yazmadan önce zaman damgalı bir yedek alır. Her modele muhafazakar `limit` (context/output) yazar; böylece opencode'un varsayılan 32k output isteğiyle "max_tokens too large" / gereksiz rate-limit baskısı oluşmaz. `small_model` yoksa `evren/deepseek-v4-flash` atanır (başlık gibi hafif işler ana modeli yormaz).
+3. **Config Birleştirme** — Mevcut `~/.config/opencode/opencode.jsonc` dosyasını okur, `evren` provider bloğunu ekler veya günceller, geri kalan her şeyi olduğu gibi bırakır. Dosya yoksa sıfırdan oluşturur. Yazmadan önce zaman damgalı bir yedek alır. Her modele muhafazakar `limit` (context/output) yazar; böylece opencode'un varsayılan 32k output isteğiyle "max_tokens too large" / gereksiz rate-limit baskısı oluşmaz. `small_model` yoksa `evren/deepseek-v4.1-flash` atanır (başlık gibi hafif işler ana modeli yormaz).
 4. **Doğrulama** — `opencode models` komutunu hem normal hem de `env` boşaltılmış şekilde çalıştırarak (GUI/IDE simülasyonu) provider'ın tanındığını teyit eder.
 
 ### Config Birleştirme Davranışı
@@ -92,7 +92,8 @@ Tam model listesi ve ayrıntı: [evren.ssyz.org.tr/llm/models](https://evren.ssy
 | Model ID | Görünen Ad |
 |----------|-----------|
 | `evren/glm-5.3` | GLM 5.3 (varsayılan) |
-| `evren/deepseek-v4-flash` | DeepSeek V4 Flash |
+| `evren/deepseek-v4.1-flash` | DeepSeek V4.1 Flash |
+| `evren/deepseek-v4-flash` | DeepSeek V4 Flash *(1 Kasım 2026'da kaldırılacak)* |
 | `evren/qwen3.8-flash-next` | Qwen 3.8 Flash Next |
 | `evren/gemma-4-31b` | Gemma 4 31B |
 | `evren/qwen3-vl-30b` | Qwen3 VL 30B |
@@ -127,7 +128,7 @@ Anahtar bu dosyaya hiçbir zaman yazılmaz. Config, anahtarı dosya referansıyl
 {
   "$schema": "https://opencode.ai/config.json",
   "model": "evren/glm-5.3",
-  "small_model": "evren/deepseek-v4-flash",
+  "small_model": "evren/deepseek-v4.1-flash",
   "provider": {
     "evren": {
       "npm": "@ai-sdk/openai-compatible",
@@ -137,12 +138,13 @@ Anahtar bu dosyaya hiçbir zaman yazılmaz. Config, anahtarı dosya referansıyl
         "apiKey": "{file:~/.config/opencode/.evren-key}"
       },
       "models": {
-        "glm-5.3":            { "name": "GLM 5.3", "limit": { "context": 200000, "output": 16384 } },
-        "deepseek-v4-flash":  { "name": "DeepSeek V4 Flash", "limit": { "context": 128000, "output": 8192 } },
-        "qwen3.8-flash-next": { "name": "Qwen 3.8 Flash Next", "limit": { "context": 128000, "output": 8192 } },
-        "gemma-4-31b":        { "name": "Gemma 4 31B", "limit": { "context": 128000, "output": 8192 } },
-        "qwen3-vl-30b":       { "name": "Qwen3 VL 30B", "limit": { "context": 128000, "output": 8192 } },
-        "auto":               { "name": "EVREN Auto", "limit": { "context": 128000, "output": 8192 } }
+        "glm-5.3":             { "name": "GLM 5.3", "limit": { "context": 200000, "output": 16384 } },
+        "deepseek-v4.1-flash": { "name": "DeepSeek V4.1 Flash", "limit": { "context": 128000, "output": 8192 } },
+        "deepseek-v4-flash":   { "name": "DeepSeek V4 Flash", "limit": { "context": 128000, "output": 8192 } },
+        "qwen3.8-flash-next":  { "name": "Qwen 3.8 Flash Next", "limit": { "context": 128000, "output": 8192 } },
+        "gemma-4-31b":         { "name": "Gemma 4 31B", "limit": { "context": 128000, "output": 8192 } },
+        "qwen3-vl-30b":        { "name": "Qwen3 VL 30B", "limit": { "context": 128000, "output": 8192 } },
+        "auto":                { "name": "EVREN Auto", "limit": { "context": 128000, "output": 8192 } }
       }
     }
   }
@@ -175,7 +177,7 @@ Ortam değişkeni yeni terminal oturumlarında otomatik yüklenir. Hemen aktif e
 | `opencode` bulunamadı | [opencode.ai](https://opencode.ai) adresinden kurun |
 | API anahtarı reddedildi | `evren_llm_` ile başladığını kontrol edin |
 | Linux'ta "API key yok" / 401 | Kurulum scriptini yeniden çalıştırın; `~/.config/opencode/.evren-key` dosyasının var olduğunu ve config'de `apiKey` alanının `{file:~/.config/opencode/.evren-key}` olduğunu doğrulayın (`opencode debug config` ile bakın). Eski `{env:...}` referansı, `.bashrc` okumayan GUI/IDE başlatmalarında boş gelir |
-| `İstek limiti aşıldı. 5 saniye sonra tekrar deneyin.` (429 `rate_limit_exceeded`) | EVREN API hızlı ardışık isteklere 5 sn soğuma uygular. opencode ile tek görev çalıştırın, paralel ajan/oturum açmayın; 429 alınca birkaç saniye bekleyip tekrar deneyin. `small_model` (`evren/deepseek-v4-flash`) başlık gibi yan işleri üstlenerek ana model yükünü azaltır |
+| `İstek limiti aşıldı. 5 saniye sonra tekrar deneyin.` (429 `rate_limit_exceeded`) | EVREN API hızlı ardışık isteklere 5 sn soğuma uygular. opencode ile tek görev çalıştırın, paralel ajan/oturum açmayın; 429 alınca birkaç saniye bekleyip tekrar deneyin. `small_model` (`evren/deepseek-v4.1-flash`) başlık gibi yan işleri üstlenerek ana model yükünü azaltır |
 | `max_tokens is too large` | Scriptin yazdığı `limit.output` değerlerini kullanın (bu repo günceldir); config'i elle düzenlediyseniz model başına `limit: {context, output}` ekleyin |
 | Terms API erişim hatası | İnternet bağlantınızı ve anahtar geçerliliğinizi kontrol edin |
 | Config parse hatası | `.bak-...` uzantılı yedek dosyayı geri yükleyin |

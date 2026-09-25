@@ -58,7 +58,7 @@ evren-opencode.cmd --uninstall
 
 1. **API key** — Prompts for your key securely (hidden input), validates the `evren_llm_...` format. Writes it to two places: shell RC files (`~/.bashrc`, `~/.zshrc`, `~/.profile`, fish config — for terminal/curl use) and `~/.config/opencode/.evren-key` (`chmod 600` — the file OpenCode actually reads).
 2. **Terms of Service** — Fetches the EVREN terms from the API, displays them, and asks for confirmation. Skips this step if you have already accepted.
-3. **Config merge** — Reads the existing `~/.config/opencode/opencode.jsonc`, adds or updates the `evren` provider block, and leaves everything else untouched. Creates the file from scratch if it does not exist. Takes a timestamped backup before writing. Writes conservative per-model `limit` (context/output) values so OpenCode's default 32k output request doesn't cause "max_tokens too large" / needless rate-limit pressure. Sets `small_model` to `evren/deepseek-v4-flash` if unset (light tasks like titles don't load the main model).
+3. **Config merge** — Reads the existing `~/.config/opencode/opencode.jsonc`, adds or updates the `evren` provider block, and leaves everything else untouched. Creates the file from scratch if it does not exist. Takes a timestamped backup before writing. Writes conservative per-model `limit` (context/output) values so OpenCode's default 32k output request doesn't cause "max_tokens too large" / needless rate-limit pressure. Sets `small_model` to `evren/deepseek-v4.1-flash` if unset (light tasks like titles don't load the main model).
 4. **Verification** — Runs `opencode models` both normally and with the env var unset (GUI/IDE simulation) to confirm the provider is recognised.
 
 ### Config merge behaviour
@@ -92,7 +92,8 @@ Full model list and details: [evren.ssyz.org.tr/llm/models](https://evren.ssyz.o
 | Model ID | Display name |
 |----------|-------------|
 | `evren/glm-5.3` | GLM 5.3 (default) |
-| `evren/deepseek-v4-flash` | DeepSeek V4 Flash |
+| `evren/deepseek-v4.1-flash` | DeepSeek V4.1 Flash |
+| `evren/deepseek-v4-flash` | DeepSeek V4 Flash *(deprecated Nov 1, 2026)* |
 | `evren/qwen3.8-flash-next` | Qwen 3.8 Flash Next |
 | `evren/gemma-4-31b` | Gemma 4 31B |
 | `evren/qwen3-vl-30b` | Qwen3 VL 30B |
@@ -127,7 +128,7 @@ the old `{env:...}` reference resolved to an empty string there and produced "AP
 {
   "$schema": "https://opencode.ai/config.json",
   "model": "evren/glm-5.3",
-  "small_model": "evren/deepseek-v4-flash",
+  "small_model": "evren/deepseek-v4.1-flash",
   "provider": {
     "evren": {
       "npm": "@ai-sdk/openai-compatible",
@@ -137,12 +138,13 @@ the old `{env:...}` reference resolved to an empty string there and produced "AP
         "apiKey": "{file:~/.config/opencode/.evren-key}"
       },
       "models": {
-        "glm-5.3":            { "name": "GLM 5.3", "limit": { "context": 200000, "output": 16384 } },
-        "deepseek-v4-flash":  { "name": "DeepSeek V4 Flash", "limit": { "context": 128000, "output": 8192 } },
-        "qwen3.8-flash-next": { "name": "Qwen 3.8 Flash Next", "limit": { "context": 128000, "output": 8192 } },
-        "gemma-4-31b":        { "name": "Gemma 4 31B", "limit": { "context": 128000, "output": 8192 } },
-        "qwen3-vl-30b":       { "name": "Qwen3 VL 30B", "limit": { "context": 128000, "output": 8192 } },
-        "auto":               { "name": "EVREN Auto", "limit": { "context": 128000, "output": 8192 } }
+        "glm-5.3":             { "name": "GLM 5.3", "limit": { "context": 200000, "output": 16384 } },
+        "deepseek-v4.1-flash": { "name": "DeepSeek V4.1 Flash", "limit": { "context": 128000, "output": 8192 } },
+        "deepseek-v4-flash":   { "name": "DeepSeek V4 Flash", "limit": { "context": 128000, "output": 8192 } },
+        "qwen3.8-flash-next":  { "name": "Qwen 3.8 Flash Next", "limit": { "context": 128000, "output": 8192 } },
+        "gemma-4-31b":         { "name": "Gemma 4 31B", "limit": { "context": 128000, "output": 8192 } },
+        "qwen3-vl-30b":        { "name": "Qwen3 VL 30B", "limit": { "context": 128000, "output": 8192 } },
+        "auto":                { "name": "EVREN Auto", "limit": { "context": 128000, "output": 8192 } }
       }
     }
   }
@@ -175,7 +177,7 @@ The environment variable takes effect in new terminal sessions. If you need it i
 | `opencode` not found | Install from [opencode.ai](https://opencode.ai) |
 | API key rejected | Check the format: must start with `evren_llm_` |
 | "API key missing" / 401 on Linux | Re-run the installer; verify `~/.config/opencode/.evren-key` exists and `apiKey` in the config is `{file:~/.config/opencode/.evren-key}` (check with `opencode debug config`). The old `{env:...}` reference resolves to empty in GUI/IDE launches that never source `.bashrc` |
-| `Rate limit exceeded. Try again in 5 seconds.` (429 `rate_limit_exceeded`) | The EVREN API applies a ~5s cooldown on rapid sequential requests. Run one task at a time in OpenCode, avoid parallel agents/sessions; on 429 wait a few seconds and retry. `small_model` (`evren/deepseek-v4-flash`) offloads side work like titles from the main model |
+| `Rate limit exceeded. Try again in 5 seconds.` (429 `rate_limit_exceeded`) | The EVREN API applies a ~5s cooldown on rapid sequential requests. Run one task at a time in OpenCode, avoid parallel agents/sessions; on 429 wait a few seconds and retry. `small_model` (`evren/deepseek-v4.1-flash`) offloads side work like titles from the main model |
 | `max_tokens is too large` | Use the `limit.output` values written by the script (this repo is current); if you hand-edited the config, add per-model `limit: {context, output}` |
 | Terms API unreachable | Check your internet connection and key validity |
 | Config parse error | Restore the `.bak-...` backup file |

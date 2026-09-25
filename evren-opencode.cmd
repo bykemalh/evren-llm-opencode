@@ -146,6 +146,7 @@ powershell.exe -NoProfile -Command ^
   "$evren=[PSCustomObject]@{ npm='@ai-sdk/openai-compatible'; name='EVREN LLM'; " ^
   "  options=[PSCustomObject]@{ baseURL='https://evren-llmapi.ssyz.org.tr/v1'; apiKey=$apiKeyRef }; " ^
   "  models=[PSCustomObject]@{ 'glm-5.3'=[PSCustomObject]@{name='GLM 5.3'; limit=[PSCustomObject]@{context=200000; output=16384}}; " ^
+  "    'deepseek-v4.1-flash'=[PSCustomObject]@{name='DeepSeek V4.1 Flash'; limit=[PSCustomObject]@{context=128000; output=8192}}; " ^
   "    'deepseek-v4-flash'=[PSCustomObject]@{name='DeepSeek V4 Flash'; limit=[PSCustomObject]@{context=128000; output=8192}}; " ^
   "    'qwen3.8-flash-next'=[PSCustomObject]@{name='Qwen 3.8 Flash Next'; limit=[PSCustomObject]@{context=128000; output=8192}}; " ^
   "    'gemma-4-31b'=[PSCustomObject]@{name='Gemma 4 31B'; limit=[PSCustomObject]@{context=128000; output=8192}}; " ^
@@ -157,7 +158,7 @@ powershell.exe -NoProfile -Command ^
   "}else{ $cfg=[PSCustomObject]@{} }; " ^
   "if(-not $cfg.PSObject.Properties['\$schema']){$cfg|Add-Member -NotePropertyName '\$schema' -NotePropertyValue $schema -Force}; " ^
   "if(-not $cfg.PSObject.Properties['model']){$cfg|Add-Member -NotePropertyName 'model' -NotePropertyValue 'evren/glm-5.3' -Force}; " ^
-  "if(-not $cfg.PSObject.Properties['small_model']){$cfg|Add-Member -NotePropertyName 'small_model' -NotePropertyValue 'evren/deepseek-v4-flash' -Force}; " ^
+  "if(-not $cfg.PSObject.Properties['small_model']){$cfg|Add-Member -NotePropertyName 'small_model' -NotePropertyValue 'evren/deepseek-v4.1-flash' -Force}; " ^
   "if(-not $cfg.PSObject.Properties['provider']){$cfg|Add-Member -NotePropertyName 'provider' -NotePropertyValue ([PSCustomObject]@{}) -Force}; " ^
   "$cfg.provider|Add-Member -NotePropertyName 'evren' -NotePropertyValue $evren -Force; " ^
   "[System.IO.File]::WriteAllText($configPath,$cfg|ConvertTo-Json -Depth 10,[System.Text.UTF8Encoding]::new($false))"
