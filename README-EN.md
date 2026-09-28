@@ -54,11 +54,34 @@ evren-opencode.cmd --uninstall
 
 ---
 
+## Updating the Model List
+
+The model list is fetched automatically from the `/v1/models` API on every install and fully synchronised: new models are added, `name`/`limit` values are refreshed, models removed from the API are deleted from the config. To refresh just the list without re-running the whole installer:
+
+```bash
+# Linux / macOS
+./evren-opencode.sh --sync-models
+```
+
+```powershell
+# Windows PowerShell
+.\evren-opencode.ps1 -SyncModels
+```
+
+```cmd
+:: Windows CMD
+evren-opencode.cmd --sync-models
+```
+
+`--sync-models` uses the stored key (`.evren-key`); it doesn't ask for the key and skips the terms step. Other providers and settings are preserved. `model`/`small_model` are kept as-is when still listed, otherwise reset to a safe value (`evren/glm-5.3`, etc.).
+
+---
+
 ## What the Installer Does
 
 1. **API key** — Prompts for your key securely (hidden input), validates the `evren_llm_...` format. Writes it to two places: shell RC files (`~/.bashrc`, `~/.zshrc`, `~/.profile`, fish config — for terminal/curl use) and `~/.config/opencode/.evren-key` (`chmod 600` — the file OpenCode actually reads).
 2. **Terms of Service** — Fetches the EVREN terms from the API, displays them, and asks for confirmation. Skips this step if you have already accepted.
-3. **Config merge** — Reads the existing `~/.config/opencode/opencode.jsonc`, adds or updates the `evren` provider block, and leaves everything else untouched. Creates the file from scratch if it does not exist. Takes a timestamped backup before writing. Writes conservative per-model `limit` (context/output) values so OpenCode's default 32k output request doesn't cause "max_tokens too large" / needless rate-limit pressure. Sets `small_model` to `evren/deepseek-v4.1-flash` if unset (light tasks like titles don't load the main model).
+3. **Model list + config merge** — Fetches the current list from the `/v1/models` endpoint; writes only chat models (`chat`/`vision_chat`), taking `limit.context`/`limit.output` from the API's real `context_length` / `default_max_output_tokens` values (8192 when `null`). Reads the existing `~/.config/opencode/opencode.jsonc`, adds or fully synchronises the `evren` provider block (models removed from the API are deleted), and leaves everything else untouched. Creates the file from scratch if it does not exist. Takes a timestamped backup before writing. A previously set `model`/`small_model` is left unchanged while still listed, otherwise reset to a safe value. Falls back to the last known list (with a warning) when the API is unreachable.
 4. **Verification** — Runs `opencode models` both normally and with the env var unset (GUI/IDE simulation) to confirm the provider is recognised.
 
 ### Config merge behaviour
@@ -67,9 +90,12 @@ evren-opencode.cmd --uninstall
 |-----------|--------|
 | `opencode.jsonc` does not exist | Created from scratch |
 | `evren` block is absent | Added; other providers kept |
-| `evren` block already exists | Updated in place |
-| `model` field is already set | Left unchanged |
-| `model` field is not set | Set to `evren/glm-5.3` |
+| `evren` block already exists | Updated in place (full sync) |
+| API has a new model | Added |
+| API dropped a model | Deleted from the config |
+| `model` field is already set and still listed | Left unchanged |
+| `model` field is empty or no longer listed | Reset to a safe value (`evren/glm-5.3` → `evren/auto` → first model) |
+| `small_model` empty or no longer listed | `evren/deepseek-v4.1-flash`, else the smallest-context model |
 
 ---
 
@@ -87,6 +113,10 @@ Get your API key at [evren.ssyz.org.tr/api-keys](https://evren.ssyz.org.tr/api-k
 
 ## Available Models
 
+The model list is fetched automatically from the `/v1/models` API during installation
+(chat models only: `task` = `chat` / `vision_chat`; embedding/rerank/OCR/audio are excluded).
+The table below is only an example; use `--sync-models` for the current list.
+
 Full model list and details: [evren.ssyz.org.tr/llm/models](https://evren.ssyz.org.tr/llm/models)
 
 | Model ID | Display name |
@@ -97,6 +127,7 @@ Full model list and details: [evren.ssyz.org.tr/llm/models](https://evren.ssyz.o
 | `evren/qwen3.8-flash-next` | Qwen 3.8 Flash Next |
 | `evren/gemma-4-31b` | Gemma 4 31B |
 | `evren/qwen3-vl-30b` | Qwen3 VL 30B |
+| `evren/mimo-v2.6-pro` | MiMo V2.6 Pro |
 | `evren/auto` | EVREN Auto |
 
 ---
@@ -122,7 +153,10 @@ Obtain yours at [evren.ssyz.org.tr/api-keys](https://evren.ssyz.org.tr/api-keys)
 
 The key is never written to this file. The config reads it via a file reference
 (so launches from GUI/IDE/desktop — which never source `.bashrc` — keep working;
-the old `{env:...}` reference resolved to an empty string there and produced "API key missing" errors):
+the old `{env:...}` reference resolved to an empty string there and produced "API key missing" errors).
+The `models` section is filled from the API on install / `--sync-models`
+(`limit` values are the API's real `context_length` / `default_max_output_tokens`);
+the example below is schema-only:
 
 ```jsonc
 {
@@ -144,6 +178,7 @@ the old `{env:...}` reference resolved to an empty string there and produced "AP
         "qwen3.8-flash-next":  { "name": "Qwen 3.8 Flash Next", "limit": { "context": 128000, "output": 8192 } },
         "gemma-4-31b":         { "name": "Gemma 4 31B", "limit": { "context": 128000, "output": 8192 } },
         "qwen3-vl-30b":        { "name": "Qwen3 VL 30B", "limit": { "context": 128000, "output": 8192 } },
+        "mimo-v2.6-pro":       { "name": "MiMo V2.6 Pro", "limit": { "context": 128000, "output": 8192 } },
         "auto":                { "name": "EVREN Auto", "limit": { "context": 128000, "output": 8192 } }
       }
     }
@@ -179,6 +214,7 @@ The environment variable takes effect in new terminal sessions. If you need it i
 | "API key missing" / 401 on Linux | Re-run the installer; verify `~/.config/opencode/.evren-key` exists and `apiKey` in the config is `{file:~/.config/opencode/.evren-key}` (check with `opencode debug config`). The old `{env:...}` reference resolves to empty in GUI/IDE launches that never source `.bashrc` |
 | `Rate limit exceeded. Try again in 5 seconds.` (429 `rate_limit_exceeded`) | The EVREN API applies a ~5s cooldown on rapid sequential requests. Run one task at a time in OpenCode, avoid parallel agents/sessions; on 429 wait a few seconds and retry. `small_model` (`evren/deepseek-v4.1-flash`) offloads side work like titles from the main model |
 | `max_tokens is too large` | Use the `limit.output` values written by the script (this repo is current); if you hand-edited the config, add per-model `limit: {context, output}` |
+| Stale model list (new model missing / removed model still there) | Refresh with `--sync-models`: `./evren-opencode.sh --sync-models` (PS: `-SyncModels`, CMD: `--sync-models`) |
 | Terms API unreachable | Check your internet connection and key validity |
 | Config parse error | Restore the `.bak-...` backup file |
 | Env variable not visible in terminal | Open a new terminal or `source ~/.bashrc` (only needed for direct `curl` use; OpenCode works via the file reference) |

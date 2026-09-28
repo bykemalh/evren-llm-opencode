@@ -17,13 +17,19 @@
 .PARAMETER Uninstall
     Belirtilirse kurulum değil kaldırma işlemi yapılır.
 
+.PARAMETER SyncModels
+    Belirtilirse kurulum yapılmaz; kayıtlı anahtar (.evren-key) ile
+    sadece model listesi API'den çekilip config güncellenir.
+
 .EXAMPLE
     .\evren-opencode.ps1
-    .\evren-opencode.ps1 --uninstall
+    .\evren-opencode.ps1 -SyncModels
+    .\evren-opencode.ps1 -Uninstall
 #>
 [CmdletBinding()]
 param(
-    [switch]$Uninstall
+    [switch]$Uninstall,
+    [switch]$SyncModels
 )
 
 $ErrorActionPreference = "Stop"
@@ -124,26 +130,115 @@ function Backup-Config {
     return $null
 }
 
-# ── EVREN provider bloğu ─────────────────────────────────────────────────────
+# ── Model listesi: API'den otomatik cekme ────────────────────────────────────
 
-# NOT: limit degerleri opencode'un varsayilan 200k context / 32k output
-# faraziyesini ezer. 32k output bircok API'de "max_tokens too large" veya
-# gereksiz rate-limit baskisi yaratir; muhafazakar degerler kullanilir.
-$EvrenProvider = [PSCustomObject]@{
-    npm     = "@ai-sdk/openai-compatible"
-    name    = "EVREN LLM"
-    options = [PSCustomObject]@{
-        baseURL = "https://evren-llmapi.ssyz.org.tr/v1"
-        apiKey  = $ApiKeyRef
+# Son bilinen liste (/v1/models yanit seklinde; degerler gercek API degerleridir).
+# API erisilemezse kurulum bu listeyle tamamlanir (uyariyla).
+$FallbackModelsJson = '{"object":"list","data":[{"id":"glm-5.3","task":"chat","context_length":524288,"default_max_output_tokens":16384},{"id":"deepseek-v4.1-flash","task":"chat","context_length":1048576,"default_max_output_tokens":16384},{"id":"deepseek-v4-flash","task":"chat","context_length":1048576,"default_max_output_tokens":16384},{"id":"qwen3.8-flash-next","task":"chat","context_length":262144,"default_max_output_tokens":16384},{"id":"gemma-4-31b","task":"chat","context_length":262144,"default_max_output_tokens":16384},{"id":"qwen3-vl-30b","task":"vision_chat","context_length":262144,"default_max_output_tokens":16384},{"id":"mimo-v2.6-pro","task":"chat","context_length":1048576,"default_max_output_tokens":16384},{"id":"auto","task":"chat","context_length":32768,"default_max_output_tokens":16384}]}'
+
+$KnownModelNames = @{
+    "glm-5.3"             = "GLM 5.3"
+    "deepseek-v4.1-flash" = "DeepSeek V4.1 Flash"
+    "deepseek-v4-flash"   = "DeepSeek V4 Flash"
+    "qwen3.8-flash-next"  = "Qwen 3.8 Flash Next"
+    "gemma-4-31b"         = "Gemma 4 31B"
+    "qwen3-vl-30b"        = "Qwen3 VL 30B"
+    "mimo-v2.6-pro"       = "MiMo V2.6 Pro"
+    "auto"                = "EVREN Auto"
+}
+
+function Get-PrettyModelName {
+    param([string]$Id)
+    if ($KnownModelNames.ContainsKey($Id)) {
+        return $KnownModelNames[$Id]
     }
-    models  = [PSCustomObject]@{
-        "glm-5.3"           = [PSCustomObject]@{ name = "GLM 5.3";            limit = [PSCustomObject]@{ context = 200000; output = 16384 } }
-        "deepseek-v4.1-flash"= [PSCustomObject]@{ name = "DeepSeek V4.1 Flash";limit = [PSCustomObject]@{ context = 128000; output = 8192 } }
-        "deepseek-v4-flash" = [PSCustomObject]@{ name = "DeepSeek V4 Flash";  limit = [PSCustomObject]@{ context = 128000; output = 8192 } }
-        "qwen3.8-flash-next"= [PSCustomObject]@{ name = "Qwen 3.8 Flash Next";limit = [PSCustomObject]@{ context = 128000; output = 8192 } }
-        "gemma-4-31b"       = [PSCustomObject]@{ name = "Gemma 4 31B";        limit = [PSCustomObject]@{ context = 128000; output = 8192 } }
-        "qwen3-vl-30b"      = [PSCustomObject]@{ name = "Qwen3 VL 30B";       limit = [PSCustomObject]@{ context = 128000; output = 8192 } }
-        "auto"              = [PSCustomObject]@{ name = "EVREN Auto";         limit = [PSCustomObject]@{ context = 128000; output = 8192 } }
+    $acronyms = @{
+        glm = "GLM"; qwen = "Qwen"; gemma = "Gemma"; deepseek = "DeepSeek"
+        mimo = "MiMo"; vl = "VL"; ocr = "OCR"; asr = "ASR"
+    }
+    $words = foreach ($tok in ($Id -split '-')) {
+        $low = $tok.ToLowerInvariant()
+        if ($acronyms.ContainsKey($low)) {
+            $acronyms[$low]
+        }
+        elseif ($low -match '^[0-9]+[a-z]*$') {
+            $tok.ToUpperInvariant()
+        }
+        elseif ($tok.Length -gt 0) {
+            $tok.Substring(0, 1).ToUpperInvariant() + $tok.Substring(1)
+        }
+        else {
+            $tok
+        }
+    }
+    return ($words -join ' ')
+}
+
+# API yanitindan (PSObject) opencode "models" haritasi uretir.
+# Sadece task=chat / vision_chat alinir; limit'ler API degerlerinden gelir.
+function ConvertTo-ModelsMap {
+    param($Payload)
+    $map = [PSCustomObject]@{}
+    foreach ($m in $Payload.data) {
+        if ($null -eq $m) { continue }
+        $id = $m.id
+        if ([string]::IsNullOrWhiteSpace($id)) { continue }
+        $task = if ($m.PSObject.Properties['task'] -and $m.task) { $m.task } else { 'chat' }
+        if ($task -notin @('chat', 'vision_chat')) { continue }
+        $ctx = if ($m.context_length) { [int]$m.context_length } else { 128000 }
+        $out = if ($m.default_max_output_tokens) { [int]$m.default_max_output_tokens } else { 8192 }
+        $map | Add-Member -NotePropertyName $id -NotePropertyValue (
+            [PSCustomObject]@{
+                name  = (Get-PrettyModelName $id)
+                limit = [PSCustomObject]@{ context = $ctx; output = $out }
+            }) -Force
+    }
+    if (($map.PSObject.Properties | Measure-Object).Count -eq 0) {
+        throw "API sohbet modeli dondurmedi."
+    }
+    return $map
+}
+
+# Config'e "evren" provider blogunu tam senkronla yazar:
+# yeni modeller eklenir, limitler tazelenir, API'den kalkanlar silinir.
+# model/small_model yoksa veya artik listede degilse guvenli degere alinir.
+function Merge-EvrenConfig {
+    param([PSCustomObject]$Cfg, $ModelsMap)
+    if (-not $Cfg.PSObject.Properties["`$schema"]) {
+        $Cfg | Add-Member -NotePropertyName "`$schema" -NotePropertyValue "https://opencode.ai/config.json" -Force
+    }
+    if (-not $Cfg.PSObject.Properties["provider"]) {
+        $Cfg | Add-Member -NotePropertyName "provider" -NotePropertyValue ([PSCustomObject]@{}) -Force
+    }
+    $provider = [PSCustomObject]@{
+        npm     = "@ai-sdk/openai-compatible"
+        name    = "EVREN LLM"
+        options = [PSCustomObject]@{
+            baseURL = $BaseUrl
+            apiKey  = $ApiKeyRef
+        }
+        models  = $ModelsMap
+    }
+    $Cfg.provider | Add-Member -NotePropertyName "evren" -NotePropertyValue $provider -Force
+
+    $ids = @($ModelsMap.PSObject.Properties.Name)
+    $cur = $Cfg.PSObject.Properties["model"]
+    if ((-not $cur) -or (($Cfg.model -like "evren/*") -and ($ids -notcontains ($Cfg.model -replace '^evren/', '')))) {
+        if ($ids -contains "glm-5.3") { $def = "evren/glm-5.3" }
+        elseif ($ids -contains "auto") { $def = "evren/auto" }
+        else { $def = "evren/$($ids[0])" }
+        $Cfg | Add-Member -NotePropertyName "model" -NotePropertyValue $def -Force
+    }
+    $curSmall = $Cfg.PSObject.Properties["small_model"]
+    if ((-not $curSmall) -or (($Cfg.small_model -like "evren/*") -and ($ids -notcontains ($Cfg.small_model -replace '^evren/', '')))) {
+        if ($ids -contains "deepseek-v4.1-flash") {
+            $small = "evren/deepseek-v4.1-flash"
+        }
+        else {
+            $min = $ModelsMap.PSObject.Properties | Sort-Object { $_.Value.limit.context } | Select-Object -First 1
+            $small = "evren/$($min.Name)"
+        }
+        $Cfg | Add-Member -NotePropertyName "small_model" -NotePropertyValue $small -Force
     }
 }
 
@@ -212,6 +307,43 @@ if ($Uninstall) {
 
     Write-Host ""
     Ok "Kaldirma tamamlandi. Diger provider/ayarlar korundu."
+    exit 0
+}
+
+# ════════════════════════════════════════════════════════════════════════════
+# SYNC-MODELS MODU (anahtar sormaz, terms adimini atlar)
+# ════════════════════════════════════════════════════════════════════════════
+
+if ($SyncModels) {
+    Write-Host "=== EVREN LLM Model Listesi Guncellemesi ===" -ForegroundColor Cyan
+
+    # Kayitli anahtari kullan (.evren-key yoksa env'e bak)
+    $syncKey = $null
+    if (Test-Path $KeyFile) {
+        $syncKey = ((Get-Content $KeyFile -Raw -Encoding UTF8) | Out-String).Trim()
+    }
+    if ([string]::IsNullOrWhiteSpace($syncKey) -and $env:EVREN_LLM_API_KEY) {
+        $syncKey = $env:EVREN_LLM_API_KEY.Trim()
+    }
+    if ([string]::IsNullOrWhiteSpace($syncKey)) {
+        Fail "Kayitli API anahtari bulunamadi ($KeyFile yok). Once kurulumu calistirin."
+    }
+
+    try {
+        $payload = Invoke-RestMethod -Method Get -Uri "$BaseUrl/models" -Headers @{ Authorization = "Bearer $syncKey" }
+        $modelsMap = ConvertTo-ModelsMap $payload
+        Ok "Model listesi API'den alindi."
+    }
+    catch {
+        Fail "Model listesi alinamadi: $($_.Exception.Message)"
+    }
+
+    New-Item -ItemType Directory -Force -Path $ConfigDir | Out-Null
+    Backup-Config | Out-Null
+    $cfg = Read-Config
+    Merge-EvrenConfig -Cfg $cfg -ModelsMap $modelsMap
+    Write-Config -Cfg $cfg
+    Ok "Model listesi API ile senkronize edildi (mevcut provider'lar korundu): $ConfigPath"
     exit 0
 }
 
@@ -316,40 +448,30 @@ if (-not $verify.accepted) {
 }
 Ok "Terms kabul durumu dogrulandi."
 
-# ── 4) opencode.jsonc'ye merge et ────────────────────────────────────────────
+# ── 4) Model listesini API'den cek ───────────────────────────────────────────
+
+try {
+    $modelsPayload = Invoke-RestMethod -Method Get -Uri "$BaseUrl/models" -Headers $Headers
+    $modelsMap = ConvertTo-ModelsMap $modelsPayload
+    Ok "Model listesi API'den alindi."
+}
+catch {
+    Warn "Model listesi API'den alinamadi ($($_.Exception.Message)); son bilinen liste kullanilacak."
+    $modelsMap = ConvertTo-ModelsMap ($FallbackModelsJson | ConvertFrom-Json)
+}
+
+# ── 5) opencode.jsonc'ye merge et ────────────────────────────────────────────
 
 New-Item -ItemType Directory -Force -Path $ConfigDir | Out-Null
 Backup-Config | Out-Null
 
 $cfg = Read-Config
-
-# $schema ekle (yoksa)
-if (-not $cfg.PSObject.Properties["`$schema"]) {
-    $cfg | Add-Member -NotePropertyName "`$schema" -NotePropertyValue "https://opencode.ai/config.json" -Force
-}
-
-# model: sadece daha önce set edilmemişse evren varsayılanını yaz
-if (-not $cfg.PSObject.Properties["model"]) {
-    $cfg | Add-Member -NotePropertyName "model" -NotePropertyValue "evren/glm-5.3" -Force
-}
-
-# small_model: hafif isler (baslik vb.) icin flash model, rate-limit baskisini azaltir
-if (-not $cfg.PSObject.Properties["small_model"]) {
-    $cfg | Add-Member -NotePropertyName "small_model" -NotePropertyValue "evren/deepseek-v4.1-flash" -Force
-}
-
-# provider objesini oluştur (yoksa)
-if (-not $cfg.PSObject.Properties["provider"]) {
-    $cfg | Add-Member -NotePropertyName "provider" -NotePropertyValue ([PSCustomObject]@{}) -Force
-}
-
-# provider.evren bloğunu ekle/güncelle
-$cfg.provider | Add-Member -NotePropertyName "evren" -NotePropertyValue $EvrenProvider -Force
+Merge-EvrenConfig -Cfg $cfg -ModelsMap $modelsMap
 
 Write-Config -Cfg $cfg
 Ok "openCode config guncellendi (mevcut provider'lar korundu): $ConfigPath"
 
-# ── 5) OpenCode doğrulaması ───────────────────────────────────────────────────
+# ── 6) OpenCode doğrulaması ───────────────────────────────────────────────────
 
 if (Get-Command opencode -ErrorAction SilentlyContinue) {
     Write-Host ""

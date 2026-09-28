@@ -3,8 +3,9 @@
 # EVREN LLM + OpenCode Kurulum / Kaldirma Scripti (Linux/macOS)
 #
 # Kullanim:
-#   ./evren-opencode.sh              (kurulum)
-#   ./evren-opencode.sh --uninstall  (kaldirma)
+#   ./evren-opencode.sh                (kurulum)
+#   ./evren-opencode.sh --sync-models  (sadece model listesini tazele)
+#   ./evren-opencode.sh --uninstall    (kaldirma)
 #
 # Kurulum:
 #   - API key'i gizli alir
@@ -14,8 +15,23 @@
 #     kullanir: boylece GUI/IDE/desktop'ten baslatilan opencode da
 #     calisir (RC dosyalarini okumayan ortamlarda {env:...} bos gelir)
 #   - EVREN kullanim sartlarini gosterir / kabul alir
-#   - opencode.jsonc icindeki mevcut ayarlara dokunmadan
-#     "evren" provider blogunu ekler / gunceller (limit degerleriyle)
+#   - Model listesini API'den (/v1/models) otomatik ceker ve
+#     opencode.jsonc icindeki mevcut ayarlara dokunmadan
+#     "evren" provider blogunu ekler / gunceller (tam senkron)
+#
+# --sync-models:
+#   - Kayitli anahtari (.evren-key) kullanir, anahtar sormaz
+#   - Terms adimini atlar; sadece model listesini API'den cekip
+#     config'deki "evren" provider blogunu gunceller
+#
+# Model senkronu (kurulum + --sync-models):
+#   - Sadece sohbet modelleri yazilir (task: chat / vision_chat);
+#     embedding/rerank/ocr/ses modelleri elenir
+#   - limit.context API'deki context_length'ten, limit.output
+#     default_max_output_tokens'tan alinir (null ise 8192)
+#   - API'de olmayan modeller config'den silinir (tam senkron);
+#     gecersiz kalan model/small_model guvenli degere alinir
+#   - API'ye erisilemezse kurulum son bilinen listeyle tamamlanir (uyariyla)
 #
 # Kaldirma:
 #   - opencode.jsonc'den "evren" blogunu cikarir
@@ -71,6 +87,112 @@ else
   fail "JSON islemi icin python3 veya jq gerekli. Lutfen birini yukleyin."
 fi
 
+# ── Model listesi: API'den otomatik cekme ────────────────────────────────────
+
+# Son bilinen liste (/v1/models yanit seklinde; degerler gercek API degerleridir).
+# API erisilemezse kurulum bu listeyle tamamlanir (uyariyla).
+FALLBACK_MODELS_JSON='{"object":"list","data":[{"id":"glm-5.3","task":"chat","context_length":524288,"default_max_output_tokens":16384},{"id":"deepseek-v4.1-flash","task":"chat","context_length":1048576,"default_max_output_tokens":16384},{"id":"deepseek-v4-flash","task":"chat","context_length":1048576,"default_max_output_tokens":16384},{"id":"qwen3.8-flash-next","task":"chat","context_length":262144,"default_max_output_tokens":16384},{"id":"gemma-4-31b","task":"chat","context_length":262144,"default_max_output_tokens":16384},{"id":"qwen3-vl-30b","task":"vision_chat","context_length":262144,"default_max_output_tokens":16384},{"id":"mimo-v2.6-pro","task":"chat","context_length":1048576,"default_max_output_tokens":16384},{"id":"auto","task":"chat","context_length":32768,"default_max_output_tokens":16384}]}'
+
+# API'den ham model listesini indirir (stdout: JSON). Basarisizsa 1 doner.
+fetch_models_json() {
+  curl -fsS --max-time 30 "${BASE_URL}/models" -H "Authorization: Bearer ${1}"
+}
+
+# API yanitindan (stdin) opencode "models" haritasi uretir (stdout: JSON).
+# Sadece task=chat / vision_chat alinir; limit'ler API degerlerinden gelir.
+# NOT: girdi gecici dosyaya alinir; cunku python programi heredoc'tan
+# (stdin) okudugu icin veri ayni kanaldan verilemez.
+build_models_map() {
+  local input_tmp
+  input_tmp="$(mktemp)" || return 1
+  cat > "$input_tmp" || { rm -f "$input_tmp"; return 1; }
+  if [[ "$json_tool" == "python3" ]]; then
+    python3 - "$input_tmp" <<'PYEOF'
+import sys, json, re
+
+KNOWN_NAMES = {
+    "glm-5.3": "GLM 5.3",
+    "deepseek-v4.1-flash": "DeepSeek V4.1 Flash",
+    "deepseek-v4-flash": "DeepSeek V4 Flash",
+    "qwen3.8-flash-next": "Qwen 3.8 Flash Next",
+    "gemma-4-31b": "Gemma 4 31B",
+    "qwen3-vl-30b": "Qwen3 VL 30B",
+    "mimo-v2.6-pro": "MiMo V2.6 Pro",
+    "auto": "EVREN Auto",
+}
+ACRONYMS = {"glm": "GLM", "qwen": "Qwen", "gemma": "Gemma",
+            "deepseek": "DeepSeek", "mimo": "MiMo",
+            "vl": "VL", "ocr": "OCR", "asr": "ASR"}
+
+def pretty(mid):
+    if mid in KNOWN_NAMES:
+        return KNOWN_NAMES[mid]
+    words = []
+    for tok in mid.split("-"):
+        low = tok.lower()
+        if low in ACRONYMS:
+            words.append(ACRONYMS[low])
+        elif re.fullmatch(r"[0-9]+[a-z]*", low):
+            words.append(tok.upper())
+        elif tok:
+            words.append(tok[:1].upper() + tok[1:])
+        else:
+            words.append(tok)
+    return " ".join(words) if words else mid
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as f:
+        payload = json.load(f)
+except Exception as e:
+    print(f"HATA: model listesi parse edilemedi: {e}", file=sys.stderr)
+    sys.exit(1)
+
+models = {}
+for m in payload.get("data", []):
+    mid = m.get("id")
+    if not mid:
+        continue
+    if m.get("task", "chat") not in ("chat", "vision_chat"):
+        continue
+    ctx = m.get("context_length") or 128000
+    out = m.get("default_max_output_tokens") or 8192
+    models[mid] = {"name": pretty(mid),
+                   "limit": {"context": ctx, "output": out}}
+
+if not models:
+    print("HATA: API sohbet modeli dondurmedi.", file=sys.stderr)
+    sys.exit(1)
+
+print(json.dumps(models, ensure_ascii=False))
+PYEOF
+    local rc=$?
+  else
+    jq -c '
+      {"glm-5.3":"GLM 5.3","deepseek-v4.1-flash":"DeepSeek V4.1 Flash","deepseek-v4-flash":"DeepSeek V4 Flash","qwen3.8-flash-next":"Qwen 3.8 Flash Next","gemma-4-31b":"Gemma 4 31B","qwen3-vl-30b":"Qwen3 VL 30B","mimo-v2.6-pro":"MiMo V2.6 Pro","auto":"EVREN Auto"} as $names
+      | (.data // [])
+      | map(select((.task // "chat") == "chat" or (.task // "chat") == "vision_chat"))
+      | map({key: .id,
+             value: {name: (if $names[.id] then $names[.id]
+                            else (.id | split("-")
+                                  | map(if test("^[0-9]+[a-z]*$"; "i") then ascii_upcase
+                                        elif test("^glm$"; "i") then "GLM"
+                                        elif test("^qwen$"; "i") then "Qwen"
+                                        elif test("^gemma$"; "i") then "Gemma"
+                                        elif test("^deepseek$"; "i") then "DeepSeek"
+                                        elif test("^mimo$"; "i") then "MiMo"
+                                        elif test("^vl$"; "i") then "VL"
+                                        else (.[0:1] | ascii_upcase) + .[1:] end)
+                                  | join(" ")) end),
+                    limit: {context: (.context_length // 128000),
+                            output: (.default_max_output_tokens // 8192)}}})
+      | from_entries
+      | select(length > 0)' "$input_tmp"
+    local rc=$?
+  fi
+  rm -f "$input_tmp"
+  return $rc
+}
+
 # Config'i yedekler
 backup_config() {
   if [[ -f "$CONFIG_PATH" ]]; then
@@ -80,20 +202,18 @@ backup_config() {
   fi
 }
 
-# Python3 ile JSON merge: mevcut JSON'a provider.evren bloğunu ekle/güncelle
+# Python3 ile JSON merge: mevcut JSON'a provider.evren bloğunu ekle/güncelle.
+# Model listesi $MODELS_MAP_JSON globalinden alinir (build_models_map ciktisi).
 merge_config_python() {
-python3 - "$CONFIG_PATH" "$KEY_FILE" "$API_KEY_REF" <<'PYEOF'
+python3 - "$CONFIG_PATH" "$API_KEY_REF" "$MODELS_MAP_JSON" <<'PYEOF'
 import sys, json, os
 
 config_path = sys.argv[1]
-key_file    = sys.argv[2]
-api_key_ref = sys.argv[3]
+api_key_ref = sys.argv[2]
+models_map  = json.loads(sys.argv[3])
 config_dir  = os.path.dirname(config_path)
 os.makedirs(config_dir, exist_ok=True)
 
-# NOT: limit degerleri opencode'un varsayilan 200k context / 32k output
-# faraziyesini ezer. 32k output bircok API'de "max_tokens too large" veya
-# gereksiz kredi/rate-limit baskisi yaratir; muhafazakar degerler kullanilir.
 evren_block = {
     "npm": "@ai-sdk/openai-compatible",
     "name": "EVREN LLM",
@@ -101,22 +221,9 @@ evren_block = {
         "baseURL": "https://evren-llmapi.ssyz.org.tr/v1",
         "apiKey":  api_key_ref
     },
-    "models": {
-        "glm-5.3":            {"name": "GLM 5.3",
-                               "limit": {"context": 200000, "output": 16384}},
-        "deepseek-v4.1-flash": {"name": "DeepSeek V4.1 Flash",
-                                "limit": {"context": 128000, "output": 8192}},
-        "deepseek-v4-flash":  {"name": "DeepSeek V4 Flash",
-                               "limit": {"context": 128000, "output": 8192}},
-        "qwen3.8-flash-next": {"name": "Qwen 3.8 Flash Next",
-                               "limit": {"context": 128000, "output": 8192}},
-        "gemma-4-31b":        {"name": "Gemma 4 31B",
-                               "limit": {"context": 128000, "output": 8192}},
-        "qwen3-vl-30b":       {"name": "Qwen3 VL 30B",
-                               "limit": {"context": 128000, "output": 8192}},
-        "auto":               {"name": "EVREN Auto",
-                               "limit": {"context": 128000, "output": 8192}}
-    }
+    # Tam senkron: API listesindeki modellerin birebir aynisi yazilir.
+    # API'den kalkan eski modeller config'den silinir.
+    "models": models_map
 }
 
 cfg = {}
@@ -132,44 +239,49 @@ if os.path.isfile(config_path):
     except Exception:
         cfg = {}
 
+def pick_default_model():
+    for cand in ("glm-5.3", "auto"):
+        if cand in models_map:
+            return f"evren/{cand}"
+    return f"evren/{next(iter(models_map))}"
+
+def pick_small_model():
+    # Baslik/ozet gibi hafif isler icin flash model: ana modelde rate-limit baskisini azaltir
+    if "deepseek-v4.1-flash" in models_map:
+        return "evren/deepseek-v4.1-flash"
+    smallest = min(models_map.items(),
+                   key=lambda kv: kv[1].get("limit", {}).get("context", 0))
+    return f"evren/{smallest[0]}"
+
 cfg.setdefault("$schema", "https://opencode.ai/config.json")
-cfg.setdefault("model",   "evren/glm-5.3")
-# Baslik/ozet gibi hafif isler icin flash model: ana modelde rate-limit baskisini azaltir
-cfg.setdefault("small_model", "evren/deepseek-v4.1-flash")
 cfg.setdefault("provider", {})
 cfg["provider"]["evren"] = evren_block
+
+# model: yoksa veya artik API listesinde degilse guvenli degere al; yoksa koru
+cur = cfg.get("model", "")
+if not cur or (cur.startswith("evren/") and cur.split("/", 1)[1] not in models_map):
+    cfg["model"] = pick_default_model()
+
+cur_small = cfg.get("small_model", "")
+if not cur_small or (cur_small.startswith("evren/") and cur_small.split("/", 1)[1] not in models_map):
+    cfg["small_model"] = pick_small_model()
 
 with open(config_path, "w", encoding="utf-8") as f:
     json.dump(cfg, f, indent=2, ensure_ascii=False)
     f.write("\n")
 
-print(f"[OK] opencode.jsonc guncellendi: {config_path}")
+print(f"[OK] opencode.jsonc guncellendi: {config_path} ({len(models_map)} model)")
 PYEOF
 }
 
-# jq ile JSON merge (JSONC girdiyi python ile once saf JSON'a cevirir)
+# jq ile JSON merge (JSONC girdiyi python ile once saf JSON'a cevirir).
+# Model listesi $MODELS_MAP_JSON globalinden alinir (build_models_map ciktisi).
 merge_config_jq() {
   local evren_json
-  evren_json=$(cat <<JSON
-{
-  "npm": "@ai-sdk/openai-compatible",
-  "name": "EVREN LLM",
-  "options": {
-    "baseURL": "https://evren-llmapi.ssyz.org.tr/v1",
-    "apiKey":  "$API_KEY_REF"
-  },
-  "models": {
-    "glm-5.3":            {"name": "GLM 5.3",            "limit": {"context": 200000, "output": 16384}},
-    "deepseek-v4.1-flash":{"name": "DeepSeek V4.1 Flash", "limit": {"context": 128000, "output": 8192}},
-    "deepseek-v4-flash":  {"name": "DeepSeek V4 Flash",  "limit": {"context": 128000, "output": 8192}},
-    "qwen3.8-flash-next": {"name": "Qwen 3.8 Flash Next","limit": {"context": 128000, "output": 8192}},
-    "gemma-4-31b":        {"name": "Gemma 4 31B",        "limit": {"context": 128000, "output": 8192}},
-    "qwen3-vl-30b":       {"name": "Qwen3 VL 30B",       "limit": {"context": 128000, "output": 8192}},
-    "auto":               {"name": "EVREN Auto",         "limit": {"context": 128000, "output": 8192}}
-  }
-}
-JSON
-)
+  evren_json="$(jq -n --argjson models "$MODELS_MAP_JSON" --arg ref "$API_KEY_REF" \
+    '{npm: "@ai-sdk/openai-compatible", name: "EVREN LLM",
+      options: {baseURL: "https://evren-llmapi.ssyz.org.tr/v1", apiKey: $ref},
+      models: $models}')" || fail "Model haritasi olusturulamadi."
   mkdir -p "$CONFIG_DIR"
   local base="{}"
   if [[ -f "$CONFIG_PATH" ]]; then
@@ -179,18 +291,29 @@ try: print(json.dumps(json.loads(raw)))
 except Exception: print("{}")' "$CONFIG_PATH" 2>/dev/null || printf '{}')"
   fi
 
-  # jq: $schema yoksa ekle, model/small_model yoksa ekle, provider.evren'i güncelle
+  # $schema yoksa ekle; model/small_model yoksa veya artik API listesinde
+  # degilse guvenli degere al; provider.evren'i tam senkronla guncelle
   printf '%s' "$base" | jq \
     --argjson evren "$evren_json" \
     '
       if has("$schema") then . else . + {"$schema": "https://opencode.ai/config.json"} end |
-      if has("model")   then . else . + {"model": "evren/glm-5.3"} end |
-      if has("small_model") then . else . + {"small_model": "evren/deepseek-v4.1-flash"} end |
       .provider //= {} |
-      .provider.evren = $evren
+      .provider.evren = $evren |
+      ($evren.models) as $m |
+      if ((.model // "") == "" or
+          ((.model | startswith("evren/")) and ((.model | split("/")[1]) as $id | ($m | has($id) | not))))
+      then .model = ($m | if has("glm-5.3") then "evren/glm-5.3"
+                          elif has("auto") then "evren/auto"
+                          else ("evren/" + (keys[0])) end)
+      else . end |
+      if ((.small_model // "") == "" or
+          ((.small_model | startswith("evren/")) and ((.small_model | split("/")[1]) as $id | ($m | has($id) | not))))
+      then .small_model = ($m | if has("deepseek-v4.1-flash") then "evren/deepseek-v4.1-flash"
+                                else ("evren/" + (to_entries | min_by(.value.limit.context) | .key)) end)
+      else . end
     ' > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
 
-  ok "opencode.jsonc guncellendi: $CONFIG_PATH"
+  ok "opencode.jsonc guncellendi: $CONFIG_PATH ($(jq -r 'keys | length' <<<"$MODELS_MAP_JSON") model)"
 }
 
 # Python3 ile evren bloğunu sil
@@ -314,6 +437,47 @@ write_env_to_rc() {
 
 # ── Parametre kontrolü ────────────────────────────────────────────────────────
 
+if [[ "${1:-}" == "--sync-models" || "${1:-}" == "--update-models" ]]; then
+  # ══════════════════════════════════════════════════════════
+  #  MODEL SENKRONU (anahtar sormaz, terms adimini atlar)
+  # ══════════════════════════════════════════════════════════
+  printf '=== EVREN LLM Model Listesi Guncellemesi ===\n'
+
+  # Kayitli anahtari kullan (.evren-key yoksa env'e bak)
+  if [[ -f "$KEY_FILE" ]]; then
+    EVREN_LLM_API_KEY="$(tr -d '\r' < "$KEY_FILE" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+  fi
+  if [[ -z "${EVREN_LLM_API_KEY:-}" ]]; then
+    fail "Kayitli API anahtari bulunamadi ($KEY_FILE yok). Once kurulumu calistirin."
+  fi
+  export EVREN_LLM_API_KEY
+
+  models_raw="$(fetch_models_json "$EVREN_LLM_API_KEY")" \
+    || fail "Model listesi alinamadi (API erisilemez). Internet baglantinizi ve anahtarinizi kontrol edin."
+  MODELS_MAP_JSON="$(printf '%s' "$models_raw" | build_models_map)" \
+    || fail "Model listesi islenemedi."
+  [[ -n "${MODELS_MAP_JSON:-}" ]] || fail "Model listesi bos dondu."
+
+  mkdir -p "$CONFIG_DIR"
+  backup_config
+
+  if [[ "$json_tool" == "python3" ]]; then
+    merge_config_python
+  else
+    merge_config_jq
+  fi
+
+  chmod 600 "$KEY_FILE" 2>/dev/null || true
+
+  printf '\n'
+  ok "Model listesi API ile senkronize edildi. Diger provider/ayarlar korundu."
+  exit 0
+fi
+
+if [[ -n "${1:-}" && "${1:-}" != "--uninstall" ]]; then
+  fail "Bilinmeyen parametre: $1 (desteklenenler: --sync-models, --uninstall)"
+fi
+
 if [[ "${1:-}" == "--uninstall" ]]; then
   # ══════════════════════════════════════════════════════════
   #  KALDIRMA
@@ -433,7 +597,21 @@ verify_accepted="$(printf '%s' "$verify_json" | sed -n 's/.*"accepted"[[:space:]
 [[ "$verify_accepted" == "true" ]] || fail "EVREN kullanim sartlari accepted=true olarak dogrulanamadi."
 ok "Terms kabul durumu dogrulandi."
 
-# ── 4) opencode.jsonc merge ──────────────────────────────────────────────────
+# ── 4) Model listesini API'den cek ───────────────────────────────────────────
+
+models_raw=""
+if models_raw="$(fetch_models_json "$EVREN_LLM_API_KEY")" && \
+   MODELS_MAP_JSON="$(printf '%s' "$models_raw" | build_models_map)" && \
+   [[ -n "${MODELS_MAP_JSON:-}" ]]; then
+  ok "Model listesi API'den alindi."
+else
+  warn "Model listesi API'den alinamadi; son bilinen liste kullanilacak."
+  MODELS_MAP_JSON="$(printf '%s' "$FALLBACK_MODELS_JSON" | build_models_map)" \
+    || fail "Yedek model listesi islenemedi."
+fi
+[[ -n "${MODELS_MAP_JSON:-}" ]] || fail "Model listesi olusturulamadi."
+
+# ── 5) opencode.jsonc merge ──────────────────────────────────────────────────
 
 mkdir -p "$CONFIG_DIR"
 backup_config
@@ -446,7 +624,7 @@ fi
 
 chmod 600 "$KEY_FILE" 2>/dev/null || true
 
-# ── 5) OpenCode doğrulaması ──────────────────────────────────────────────────
+# ── 6) OpenCode doğrulaması ──────────────────────────────────────────────────
 # NOT: config artik {file:...} referansi kullandigi icin dogrulama env olmadan
 # da gecmelidir (GUI/IDE senaryosu). Env'i bilerek bosaltarak test et.
 

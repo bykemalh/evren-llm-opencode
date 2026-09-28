@@ -54,11 +54,34 @@ evren-opencode.cmd --uninstall
 
 ---
 
+## Model Listesini Güncelleme
+
+Model listesi her kurulumda `/v1/models` API'sinden otomatik çekilir ve tam senkron yapılır: yeni modeller eklenir, `name`/`limit` değerleri tazelenir, API'den kalkan modeller config'den silinir. Kurulumu baştan çalıştırmadan sadece listeyi tazelemek için:
+
+```bash
+# Linux / macOS
+./evren-opencode.sh --sync-models
+```
+
+```powershell
+# Windows PowerShell
+.\evren-opencode.ps1 -SyncModels
+```
+
+```cmd
+:: Windows CMD
+evren-opencode.cmd --sync-models
+```
+
+`--sync-models` kayıtlı anahtarı (`.evren-key`) kullanır; anahtar sormaz, kullanım şartları adımını atlar. Diğer provider'lar ve ayarlar korunur. `model`/`small_model` hâlâ listede ise aynen korunur; listeden kalkmışsa güvenli bir değere alınır (`evren/glm-5.3` vb.).
+
+---
+
 ## Kurulum Adımları
 
 1. **API Anahtarı** — Anahtarınızı gizli olarak (ekranda görünmeden) girer, `evren_llm_...` formatını doğrular. Anahtarı iki yere yazar: shell RC dosyalarına (`~/.bashrc`, `~/.zshrc`, `~/.profile`, fish config — terminal/curl kullanımı için) ve `~/.config/opencode/.evren-key` dosyasına (`chmod 600` — opencode'un okuduğu asıl kaynak).
 2. **Kullanım Şartları** — EVREN'in kullanım şartlarını API üzerinden çeker, ekranda gösterir ve onayınızı ister. Daha önce kabul ettiyseniz bu adım atlanır.
-3. **Config Birleştirme** — Mevcut `~/.config/opencode/opencode.jsonc` dosyasını okur, `evren` provider bloğunu ekler veya günceller, geri kalan her şeyi olduğu gibi bırakır. Dosya yoksa sıfırdan oluşturur. Yazmadan önce zaman damgalı bir yedek alır. Her modele muhafazakar `limit` (context/output) yazar; böylece opencode'un varsayılan 32k output isteğiyle "max_tokens too large" / gereksiz rate-limit baskısı oluşmaz. `small_model` yoksa `evren/deepseek-v4.1-flash` atanır (başlık gibi hafif işler ana modeli yormaz).
+3. **Model Listesi + Config Birleştirme** — `/v1/models` endpoint'inden güncel listeyi çeker; sadece sohbet modellerini (`chat`/`vision_chat`) yazar, `limit.context`/`limit.output` değerlerini API'deki gerçek `context_length` / `default_max_output_tokens` değerlerinden alır (`null` ise 8192). Mevcut `~/.config/opencode/opencode.jsonc` dosyasını okur, `evren` provider bloğunu tam senkronla ekler veya günceller (API'den kalkan modeller silinir), geri kalan her şeyi olduğu gibi bırakır. Dosya yoksa sıfırdan oluşturur. Yazmadan önce zaman damgalı bir yedek alır. `model`/`small_model` daha önce ayarlanmış ve hâlâ listede ise değiştirilmez; geçersiz kalmışsa güvenli bir değere alınır. API'ye erişilemezse son bilinen liste kullanılır (uyarıyla).
 4. **Doğrulama** — `opencode models` komutunu hem normal hem de `env` boşaltılmış şekilde çalıştırarak (GUI/IDE simülasyonu) provider'ın tanındığını teyit eder.
 
 ### Config Birleştirme Davranışı
@@ -67,9 +90,12 @@ evren-opencode.cmd --uninstall
 |-------|-------|
 | `opencode.jsonc` mevcut değil | Sıfırdan oluşturulur |
 | `evren` bloğu yok | Eklenir; diğer provider'lar korunur |
-| `evren` bloğu zaten var | Yerinde güncellenir |
-| `model` alanı daha önce ayarlanmış | Değiştirilmez |
-| `model` alanı boş | `evren/glm-5.3` yazılır |
+| `evren` bloğu zaten var | Yerinde güncellenir (tam senkron) |
+| API'de yeni model var | Eklenir |
+| API'den kalkan model var | Config'den silinir |
+| `model` alanı daha önce ayarlanmış ve listede | Değiştirilmez |
+| `model` alanı boş veya artık listede değil | Güvenli değere alınır (`evren/glm-5.3` → `evren/auto` → ilk model) |
+| `small_model` boş veya artık listede değil | `evren/deepseek-v4.1-flash`, yoksa en küçük context'li model |
 
 ---
 
@@ -87,6 +113,10 @@ API anahtarınızı almak için: [evren.ssyz.org.tr/api-keys](https://evren.ssyz
 
 ## Desteklenen Modeller
 
+Model listesi kurulum sırasında `/v1/models` API'sinden otomatik çekilir
+(sadece sohbet modelleri: `task` = `chat` / `vision_chat`; embedding/rerank/OCR/ses elenir).
+Aşağıdaki tablo yalnızca örnektir; güncel liste için `--sync-models` kullanın.
+
 Tam model listesi ve ayrıntı: [evren.ssyz.org.tr/llm/models](https://evren.ssyz.org.tr/llm/models)
 
 | Model ID | Görünen Ad |
@@ -97,6 +127,7 @@ Tam model listesi ve ayrıntı: [evren.ssyz.org.tr/llm/models](https://evren.ssy
 | `evren/qwen3.8-flash-next` | Qwen 3.8 Flash Next |
 | `evren/gemma-4-31b` | Gemma 4 31B |
 | `evren/qwen3-vl-30b` | Qwen3 VL 30B |
+| `evren/mimo-v2.6-pro` | MiMo V2.6 Pro |
 | `evren/auto` | EVREN Auto |
 
 ---
@@ -122,7 +153,10 @@ Anahtarınızı buradan alın: [evren.ssyz.org.tr/api-keys](https://evren.ssyz.o
 
 Anahtar bu dosyaya hiçbir zaman yazılmaz. Config, anahtarı dosya referansıyla okur
 (bu sayede `.bashrc` okumayan GUI/IDE/desktop başlatmalarında da çalışır;
-`{env:...}` o ortamlarda boş gelip "API key yok" hatası veriyordu):
+`{env:...}` o ortamlarda boş gelip "API key yok" hatası veriyordu).
+`models` bölümü kurulumda / `--sync-models` ile API'den doldurulur
+(`limit` değerleri API'deki gerçek `context_length` / `default_max_output_tokens`'tur);
+aşağıdaki örnek yalnızca şema içindir:
 
 ```jsonc
 {
@@ -144,6 +178,7 @@ Anahtar bu dosyaya hiçbir zaman yazılmaz. Config, anahtarı dosya referansıyl
         "qwen3.8-flash-next":  { "name": "Qwen 3.8 Flash Next", "limit": { "context": 128000, "output": 8192 } },
         "gemma-4-31b":         { "name": "Gemma 4 31B", "limit": { "context": 128000, "output": 8192 } },
         "qwen3-vl-30b":        { "name": "Qwen3 VL 30B", "limit": { "context": 128000, "output": 8192 } },
+        "mimo-v2.6-pro":       { "name": "MiMo V2.6 Pro", "limit": { "context": 128000, "output": 8192 } },
         "auto":                { "name": "EVREN Auto", "limit": { "context": 128000, "output": 8192 } }
       }
     }
@@ -179,6 +214,7 @@ Ortam değişkeni yeni terminal oturumlarında otomatik yüklenir. Hemen aktif e
 | Linux'ta "API key yok" / 401 | Kurulum scriptini yeniden çalıştırın; `~/.config/opencode/.evren-key` dosyasının var olduğunu ve config'de `apiKey` alanının `{file:~/.config/opencode/.evren-key}` olduğunu doğrulayın (`opencode debug config` ile bakın). Eski `{env:...}` referansı, `.bashrc` okumayan GUI/IDE başlatmalarında boş gelir |
 | `İstek limiti aşıldı. 5 saniye sonra tekrar deneyin.` (429 `rate_limit_exceeded`) | EVREN API hızlı ardışık isteklere 5 sn soğuma uygular. opencode ile tek görev çalıştırın, paralel ajan/oturum açmayın; 429 alınca birkaç saniye bekleyip tekrar deneyin. `small_model` (`evren/deepseek-v4.1-flash`) başlık gibi yan işleri üstlenerek ana model yükünü azaltır |
 | `max_tokens is too large` | Scriptin yazdığı `limit.output` değerlerini kullanın (bu repo günceldir); config'i elle düzenlediyseniz model başına `limit: {context, output}` ekleyin |
+| Model listesi eskimiş (yeni model görünmüyor / kalkan model duruyor) | `--sync-models` ile tazele: `./evren-opencode.sh --sync-models` (PS: `-SyncModels`, CMD: `--sync-models`) |
 | Terms API erişim hatası | İnternet bağlantınızı ve anahtar geçerliliğinizi kontrol edin |
 | Config parse hatası | `.bak-...` uzantılı yedek dosyayı geri yükleyin |
 | Ortam değişkeni terminalde görünmüyor | Yeni terminal açın veya `source ~/.bashrc` çalıştırın (sadece doğrudan `curl` kullanımı için gerekli; opencode dosya referansıyla çalışır) |

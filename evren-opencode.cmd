@@ -5,14 +5,30 @@ setlocal EnableExtensions EnableDelayedExpansion
 :: EVREN LLM + OpenCode Kurulum / Kaldirma Scripti (Windows CMD)
 ::
 :: Kullanim:
-::   evren-opencode.cmd              (kurulum)
-::   evren-opencode.cmd --uninstall  (kaldirma)
+::   evren-opencode.cmd                (kurulum)
+::   evren-opencode.cmd --sync-models  (sadece model listesini tazele)
+::   evren-opencode.cmd --uninstall    (kaldirma)
 ::
 :: Kurulum:
 ::   - API key'i gizli alir, User env degiskeni yapar
 ::   - EVREN kullanim sartlarini gosterir / kabul alir
-::   - opencode.jsonc icindeki mevcut ayarlara dokunmadan
-::     "evren" provider blogunu ekler / gunceller
+::   - Model listesini API'den (/v1/models) otomatik ceker ve
+::     opencode.jsonc icindeki mevcut ayarlara dokunmadan
+::     "evren" provider blogunu ekler / gunceller (tam senkron)
+::
+:: --sync-models:
+::   - Kayitli anahtari (.evren-key) kullanir, anahtar sormaz
+::   - Terms adimini atlar; sadece model listesini API'den cekip
+::     config'deki "evren" provider blogunu gunceller
+::
+:: Model senkronu (kurulum + --sync-models):
+::   - Sadece sohbet modelleri yazilir (task: chat / vision_chat);
+::     embedding/rerank/ocr/ses modelleri elenir
+::   - limit.context API'deki context_length'ten, limit.output
+::     default_max_output_tokens'tan alinir (null ise 8192)
+::   - API'de olmayan modeller config'den silinir (tam senkron);
+::     gecersiz kalan model/small_model guvenli degere alinir
+::   - API'ye erisilemezse kurulum son bilinen listeyle tamamlanir (uyariyla)
 ::
 :: Kaldirma:
 ::   - opencode.jsonc'den "evren" blogunu cikarir
@@ -29,6 +45,12 @@ set "API_KEY_REF={file:~/.config/opencode/.evren-key}"
 :: ── Parametre kontrolü ──────────────────────────────────────
 
 if /I "%~1"=="--uninstall" goto :UNINSTALL
+if /I "%~1"=="--sync-models" goto :SYNCMODELS
+if /I "%~1"=="--update-models" goto :SYNCMODELS
+if not "%~1"=="" (
+  echo HATA: Bilinmeyen parametre. Desteklenenler: --sync-models, --uninstall
+  exit /b 1
+)
 
 :: ════════════════════════════════════════════════════════════
 ::  KURULUM
@@ -129,7 +151,7 @@ if /I not "%VERIFY_ACCEPTED%"=="True" (
 )
 echo [OK] Terms kabul durumu dogrulandi.
 
-:: ── 4) opencode.jsonc merge ─────────────────────────────────
+:: ── 4) Model listesini API'den cek + opencode.jsonc merge ───
 if not exist "%CONFIG_DIR%" mkdir "%CONFIG_DIR%"
 
 :: Varsa yedekle
@@ -140,34 +162,17 @@ if exist "%CONFIG_PATH%" (
   echo [INFO] Mevcut config yedeklendi: %CONFIG_PATH%.bak-!_DT!
 )
 
-:: Merge işlemini PowerShell'e devret
-powershell.exe -NoProfile -Command ^
-  "$configPath='%CONFIG_PATH%'; $apiKeyRef='%API_KEY_REF%'; $schema='https://opencode.ai/config.json'; " ^
-  "$evren=[PSCustomObject]@{ npm='@ai-sdk/openai-compatible'; name='EVREN LLM'; " ^
-  "  options=[PSCustomObject]@{ baseURL='https://evren-llmapi.ssyz.org.tr/v1'; apiKey=$apiKeyRef }; " ^
-  "  models=[PSCustomObject]@{ 'glm-5.3'=[PSCustomObject]@{name='GLM 5.3'; limit=[PSCustomObject]@{context=200000; output=16384}}; " ^
-  "    'deepseek-v4.1-flash'=[PSCustomObject]@{name='DeepSeek V4.1 Flash'; limit=[PSCustomObject]@{context=128000; output=8192}}; " ^
-  "    'deepseek-v4-flash'=[PSCustomObject]@{name='DeepSeek V4 Flash'; limit=[PSCustomObject]@{context=128000; output=8192}}; " ^
-  "    'qwen3.8-flash-next'=[PSCustomObject]@{name='Qwen 3.8 Flash Next'; limit=[PSCustomObject]@{context=128000; output=8192}}; " ^
-  "    'gemma-4-31b'=[PSCustomObject]@{name='Gemma 4 31B'; limit=[PSCustomObject]@{context=128000; output=8192}}; " ^
-  "    'qwen3-vl-30b'=[PSCustomObject]@{name='Qwen3 VL 30B'; limit=[PSCustomObject]@{context=128000; output=8192}}; " ^
-  "    'auto'=[PSCustomObject]@{name='EVREN Auto'; limit=[PSCustomObject]@{context=128000; output=8192}} } }; " ^
-  "if(Test-Path $configPath){ $raw=Get-Content $configPath -Raw -Encoding UTF8; " ^
-  "  $stripped=$raw -replace '(?m)^\s*//.*$','' -replace '/\*[\s\S]*?\*/','' -replace ',\s*([}\]])','$1'; " ^
-  "  try{ $cfg=$stripped|ConvertFrom-Json }catch{ $cfg=[PSCustomObject]@{} } " ^
-  "}else{ $cfg=[PSCustomObject]@{} }; " ^
-  "if(-not $cfg.PSObject.Properties['\$schema']){$cfg|Add-Member -NotePropertyName '\$schema' -NotePropertyValue $schema -Force}; " ^
-  "if(-not $cfg.PSObject.Properties['model']){$cfg|Add-Member -NotePropertyName 'model' -NotePropertyValue 'evren/glm-5.3' -Force}; " ^
-  "if(-not $cfg.PSObject.Properties['small_model']){$cfg|Add-Member -NotePropertyName 'small_model' -NotePropertyValue 'evren/deepseek-v4.1-flash' -Force}; " ^
-  "if(-not $cfg.PSObject.Properties['provider']){$cfg|Add-Member -NotePropertyName 'provider' -NotePropertyValue ([PSCustomObject]@{}) -Force}; " ^
-  "$cfg.provider|Add-Member -NotePropertyName 'evren' -NotePropertyValue $evren -Force; " ^
-  "[System.IO.File]::WriteAllText($configPath,$cfg|ConvertTo-Json -Depth 10,[System.Text.UTF8Encoding]::new($false))"
-
+set "ALLOW_FALLBACK=1"
+call :FETCH_MODELS
 if errorlevel 1 (
-  echo HATA: opencode.jsonc guncellenemedi.
   exit /b 1
 )
-echo [OK] OpenCode config guncellendi ^(mevcut provider'lar korundu^): %CONFIG_PATH%
+
+call :MERGE_CONFIG
+if errorlevel 1 (
+  exit /b 1
+)
+del "%MODELS_TMP%" 2>nul
 
 :: ── 5) OpenCode doğrulaması ─────────────────────────────────
 where opencode >nul 2>nul
@@ -250,4 +255,120 @@ if exist "%KEY_FILE%" (
 
 echo.
 echo [OK] Kaldirma tamamlandi. Diger provider/ayarlar korundu.
+exit /b 0
+
+:: ════════════════════════════════════════════════════════════
+::  MODEL SENKRONU (anahtar sormaz, terms adimini atlar)
+:: ════════════════════════════════════════════════════════════
+:SYNCMODELS
+echo === EVREN LLM Model Listesi Guncellemesi ===
+echo.
+
+if not exist "%KEY_FILE%" (
+  echo HATA: Kayitli API anahtari bulunamadi. Once kurulumu calistirin.
+  exit /b 1
+)
+for /f "usebackq delims=" %%A in (
+  `powershell.exe -NoProfile -Command "(Get-Content '%KEY_FILE%' -Raw -Encoding UTF8).Trim()"`
+) do set "EVREN_LLM_API_KEY=%%A"
+
+if not defined EVREN_LLM_API_KEY (
+  echo HATA: Kayitli API anahtari okunamadi.
+  exit /b 1
+)
+
+if not exist "%CONFIG_DIR%" mkdir "%CONFIG_DIR%"
+if exist "%CONFIG_PATH%" (
+  for /f "tokens=2 delims==" %%D in ('wmic os get LocalDateTime /value') do set "_DT=%%D"
+  set "_DT=!_DT:~0,8!-!_DT:~8,6!"
+  copy /y "%CONFIG_PATH%" "%CONFIG_PATH%.bak-!_DT!" >nul
+  echo [INFO] Mevcut config yedeklendi: %CONFIG_PATH%.bak-!_DT!
+)
+
+set "ALLOW_FALLBACK=0"
+call :FETCH_MODELS
+if errorlevel 1 (
+  exit /b 1
+)
+
+call :MERGE_CONFIG
+if errorlevel 1 (
+  exit /b 1
+)
+del "%MODELS_TMP%" 2>nul
+
+echo.
+echo [OK] Model listesi guncellendi. Diger ayarlar korundu.
+exit /b 0
+
+:: ── Altprogram: model listesini API'den cek ─────────────────
+:: Girdi: EVREN_LLM_API_KEY, ALLOW_FALLBACK (1/0).
+:: Cikti: %MODELS_TMP% dosyasi (models haritasi JSON). Donus: errorlevel 0/1.
+:FETCH_MODELS
+set "MODELS_TMP=%TEMP%\evren-models-%RANDOM%.json"
+powershell.exe -NoProfile -Command ^
+  "$h=@{Authorization='Bearer %EVREN_LLM_API_KEY%'}; " ^
+  "try{ $p=Invoke-RestMethod -Uri '%BASE_URL%/models' -Headers $h }catch{ exit 2 }; " ^
+  "$names=@{'glm-5.3'='GLM 5.3'; 'deepseek-v4.1-flash'='DeepSeek V4.1 Flash'; 'deepseek-v4-flash'='DeepSeek V4 Flash'; 'qwen3.8-flash-next'='Qwen 3.8 Flash Next'; 'gemma-4-31b'='Gemma 4 31B'; 'qwen3-vl-30b'='Qwen3 VL 30B'; 'mimo-v2.6-pro'='MiMo V2.6 Pro'; 'auto'='EVREN Auto'}; " ^
+  "function pn($i){ if($names.ContainsKey($i)){ return $names[$i] }; $a=@{glm='GLM'; qwen='Qwen'; gemma='Gemma'; deepseek='DeepSeek'; mimo='MiMo'; vl='VL'; ocr='OCR'; asr='ASR'}; (($i -split '-') | ForEach-Object { $t=$_; $l=$t.ToLowerInvariant(); if($a.ContainsKey($l)){ $a[$l] } elseif($l -match '^[0-9]+[a-z]*$'){ $t.ToUpperInvariant() } elseif($t.Length -gt 0){ $t.Substring(0,1).ToUpperInvariant()+$t.Substring(1) } else{ $t } }) -join ' ' }; " ^
+  "$map=[PSCustomObject]@{}; " ^
+  "foreach($m in $p.data){ $id=$m.id; if([string]::IsNullOrWhiteSpace($id)){ continue }; $t=if($m.task){ $m.task }else{ 'chat' }; if($t -notin @('chat','vision_chat')){ continue }; $c=if($m.context_length){ [int]$m.context_length }else{ 128000 }; $o=if($m.default_max_output_tokens){ [int]$m.default_max_output_tokens }else{ 8192 }; $map|Add-Member -NotePropertyName $id -NotePropertyValue ([PSCustomObject]@{name=(pn $id); limit=[PSCustomObject]@{context=$c; output=$o}}) -Force }; " ^
+  "if(($map.PSObject.Properties|Measure-Object).Count -eq 0){ exit 3 }; " ^
+  "[System.IO.File]::WriteAllText('%MODELS_TMP%',($map|ConvertTo-Json -Compress -Depth 5),[System.Text.UTF8Encoding]::new($false))"
+if errorlevel 3 (
+  echo HATA: API sohbet modeli dondurmedi.
+  exit /b 1
+)
+if errorlevel 2 (
+  if "%ALLOW_FALLBACK%"=="1" (
+    echo [UYARI] Model listesi API'den alinamadi; son bilinen liste kullanilacak.
+    powershell.exe -NoProfile -Command ^
+      "$map=[PSCustomObject]@{'glm-5.3'=[PSCustomObject]@{name='GLM 5.3'; limit=[PSCustomObject]@{context=524288; output=16384}}; " ^
+      " 'deepseek-v4.1-flash'=[PSCustomObject]@{name='DeepSeek V4.1 Flash'; limit=[PSCustomObject]@{context=1048576; output=16384}}; " ^
+      " 'deepseek-v4-flash'=[PSCustomObject]@{name='DeepSeek V4 Flash'; limit=[PSCustomObject]@{context=1048576; output=16384}}; " ^
+      " 'qwen3.8-flash-next'=[PSCustomObject]@{name='Qwen 3.8 Flash Next'; limit=[PSCustomObject]@{context=262144; output=16384}}; " ^
+      " 'gemma-4-31b'=[PSCustomObject]@{name='Gemma 4 31B'; limit=[PSCustomObject]@{context=262144; output=16384}}; " ^
+      " 'qwen3-vl-30b'=[PSCustomObject]@{name='Qwen3 VL 30B'; limit=[PSCustomObject]@{context=262144; output=16384}}; " ^
+      " 'mimo-v2.6-pro'=[PSCustomObject]@{name='MiMo V2.6 Pro'; limit=[PSCustomObject]@{context=1048576; output=16384}}; " ^
+      " 'auto'=[PSCustomObject]@{name='EVREN Auto'; limit=[PSCustomObject]@{context=32768; output=16384}} }; " ^
+      "[System.IO.File]::WriteAllText('%MODELS_TMP%',($map|ConvertTo-Json -Compress -Depth 5),[System.Text.UTF8Encoding]::new($false))"
+    if errorlevel 1 (
+      echo HATA: Yedek model listesi yazilamadi.
+      exit /b 1
+    )
+    exit /b 0
+  )
+  echo HATA: Model listesi alinamadi. Internet baglantinizi ve anahtarinizi kontrol edin.
+  exit /b 1
+)
+if errorlevel 1 (
+  echo HATA: Model listesi alinirken hata olustu.
+  exit /b 1
+)
+echo [OK] Model listesi API'den alindi.
+exit /b 0
+
+:: ── Altprogram: %MODELS_TMP% haritasini opencode.jsonc'ye merge et ──
+:MERGE_CONFIG
+powershell.exe -NoProfile -Command ^
+  "$configPath='%CONFIG_PATH%'; $apiKeyRef='%API_KEY_REF%'; $schema='https://opencode.ai/config.json'; " ^
+  "$map=Get-Content '%MODELS_TMP%' -Raw -Encoding UTF8 | ConvertFrom-Json; " ^
+  "$evren=[PSCustomObject]@{ npm='@ai-sdk/openai-compatible'; name='EVREN LLM'; " ^
+  "  options=[PSCustomObject]@{ baseURL='https://evren-llmapi.ssyz.org.tr/v1'; apiKey=$apiKeyRef }; models=$map }; " ^
+  "if(Test-Path $configPath){ $raw=Get-Content $configPath -Raw -Encoding UTF8; " ^
+  "  $stripped=$raw -replace '(?m)^\s*//.*$','' -replace '/\*[\s\S]*?\*/','' -replace ',\s*([}\]])','$1'; " ^
+  "  try{ $cfg=$stripped|ConvertFrom-Json }catch{ $cfg=[PSCustomObject]@{} } " ^
+  "}else{ $cfg=[PSCustomObject]@{} }; " ^
+  "if(-not $cfg.PSObject.Properties['$schema']){$cfg|Add-Member -NotePropertyName '$schema' -NotePropertyValue $schema -Force}; " ^
+  "if(-not $cfg.PSObject.Properties['provider']){$cfg|Add-Member -NotePropertyName 'provider' -NotePropertyValue ([PSCustomObject]@{}) -Force}; " ^
+  "$cfg.provider|Add-Member -NotePropertyName 'evren' -NotePropertyValue $evren -Force; " ^
+  "$ids=@($map.PSObject.Properties.Name); " ^
+  "if((-not $cfg.PSObject.Properties['model']) -or (($cfg.model -like 'evren/*') -and ($ids -notcontains ($cfg.model -replace '^evren/','')))){ if($ids -contains 'glm-5.3'){$d='evren/glm-5.3'}elseif($ids -contains 'auto'){$d='evren/auto'}else{$d='evren/'+$ids[0]}; $cfg|Add-Member -NotePropertyName 'model' -NotePropertyValue $d -Force }; " ^
+  "if((-not $cfg.PSObject.Properties['small_model']) -or (($cfg.small_model -like 'evren/*') -and ($ids -notcontains ($cfg.small_model -replace '^evren/','')))){ if($ids -contains 'deepseek-v4.1-flash'){$s='evren/deepseek-v4.1-flash'}else{$s='evren/'+(($map.PSObject.Properties|Sort-Object{$_.Value.limit.context}|Select-Object -First 1).Name)}; $cfg|Add-Member -NotePropertyName 'small_model' -NotePropertyValue $s -Force }; " ^
+  "[System.IO.File]::WriteAllText($configPath,($cfg|ConvertTo-Json -Depth 10),[System.Text.UTF8Encoding]::new($false))"
+if errorlevel 1 (
+  echo HATA: opencode.jsonc guncellenemedi.
+  exit /b 1
+)
+echo [OK] OpenCode config guncellendi ^(mevcut provider'lar korundu^): %CONFIG_PATH%
 exit /b 0

@@ -10,54 +10,63 @@
         "baseURL": "https://evren-llmapi.ssyz.org.tr/v1",
         "apiKey": "{file:~/.config/opencode/.evren-key}"
       },
+      // NOT: bu liste kurulum scriptleri tarafindan /v1/models API'sinden otomatik
+      // doldurulur (tam senkron); elle degistirmeyin, --sync-models ile tazeleyin.
       "models": {
         "glm-5.3": {
           "name": "GLM 5.3",
           "limit": {
-            "context": 200000,
+            "context": 524288,
             "output": 16384
           }
         },
         "deepseek-v4.1-flash": {
           "name": "DeepSeek V4.1 Flash",
           "limit": {
-            "context": 128000,
-            "output": 8192
+            "context": 1048576,
+            "output": 16384
           }
         },
         "deepseek-v4-flash": {
           "name": "DeepSeek V4 Flash",
           "limit": {
-            "context": 128000,
-            "output": 8192
+            "context": 1048576,
+            "output": 16384
           }
         },
         "qwen3.8-flash-next": {
           "name": "Qwen 3.8 Flash Next",
           "limit": {
-            "context": 128000,
-            "output": 8192
+            "context": 262144,
+            "output": 16384
           }
         },
         "gemma-4-31b": {
           "name": "Gemma 4 31B",
           "limit": {
-            "context": 128000,
-            "output": 8192
+            "context": 262144,
+            "output": 16384
           }
         },
         "qwen3-vl-30b": {
           "name": "Qwen3 VL 30B",
           "limit": {
-            "context": 128000,
-            "output": 8192
+            "context": 262144,
+            "output": 16384
+          }
+        },
+        "mimo-v2.6-pro": {
+          "name": "MiMo V2.6 Pro",
+          "limit": {
+            "context": 1048576,
+            "output": 16384
           }
         },
         "auto": {
           "name": "EVREN Auto",
           "limit": {
-            "context": 128000,
-            "output": 8192
+            "context": 32768,
+            "output": 16384
           }
         }
       }
